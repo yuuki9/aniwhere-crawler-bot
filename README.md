@@ -1,6 +1,6 @@
-# Aniwhere AI — 하비숍 요약 API
+# Aniwhere AI — 가챠/피규어샵 요약 API
 
-하비숍 정보가 담긴 CSV를 업로드하면 Google Gemini API가 각 상점의 특징을 요약해 주는 FastAPI 서버입니다.
+가챠/피규어샵 정보가 담긴 CSV를 업로드하면 Google Gemini API가 각 상점의 특징을 요약해 주는 FastAPI 서버입니다.
 
 ## 프로젝트 구조
 
