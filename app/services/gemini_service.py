@@ -38,7 +38,7 @@ def _build_prompt(shop: ShopRecord) -> str:
     단일 상점에 대한 요약 요청 프롬프트를 생성한다.
 
     [프롬프트 엔지니어링 포인트]
-    - 역할 지정(Role): 하비숍 큐레이터로 페르소나 고정
+    - 역할 지정(Role): 가챠/피규어샵 큐레이터로 페르소나 고정
     - 출력 형식 강제: 3문장 이내 한국어 요약
     - 근거 명시: 제공된 링크 정보를 바탕으로 하도록 유도
     - Few-shot 예시 삽입이 필요하다면 이 함수 안에 추가할 것
@@ -55,7 +55,7 @@ def _build_prompt(shop: ShopRecord) -> str:
         sns_parts.append(f"홈페이지: {shop.homepage}")
     sns_info = "\n".join(f"  - {s}" for s in sns_parts) if sns_parts else "  (없음)"
 
-    return f"""당신은 취미·하비숍 전문 큐레이터입니다.
+    return f"""당신은 가챠/피규어샵 전문 큐레이터입니다.
 아래 상점 정보를 참고하여 이 상점이 어떤 곳인지 한국어로 3문장 이내로 간결하게 요약해 주세요.
 알 수 없는 정보는 추측하지 말고, 제공된 정보 범위 안에서만 설명하세요.
 

@@ -31,7 +31,34 @@ aniwhere-ai/
 └── README.md
 ```
 
-## 빠른 시작
+## 빠른 시작 (Docker 권장)
+
+### 1. `.env` 파일 생성
+
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env
+# macOS/Linux
+cp .env.example .env
+```
+
+`.env`에서 `GEMINI_API_KEY` 값을 실제 키로 교체하세요.
+
+### 2. Docker로 실행
+
+```bash
+docker compose up --build
+```
+
+서버 중지:
+
+```bash
+docker compose down
+```
+
+Swagger UI: http://localhost:8000/docs
+
+## 로컬 Python 실행 (선택)
 
 ### 1. 환경 설정
 
@@ -49,13 +76,12 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# GEMINI_API_KEY 값을 실제 키로 교체
 ```
 
 ### 3. 서버 실행
 
 ```bash
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 Swagger UI: http://localhost:8000/docs

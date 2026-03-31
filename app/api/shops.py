@@ -23,7 +23,7 @@ router = APIRouter(prefix="/shops", tags=["shops"])
     ),
 )
 async def summarize_shops_from_csv(
-    file: UploadFile = File(..., description="하비숍 정보가 담긴 CSV 파일"),
+    file: UploadFile = File(..., description="갸차/피규어샵 정보가 담긴 CSV 파일"),
     concurrency: int = Query(default=5, ge=1, le=20, description="Gemini 동시 요청 수"),
 ):
     records = await parse_upload_to_records(file)

@@ -18,7 +18,7 @@ class ShopRecord(BaseModel):
     @field_validator("blog", mode="before")
     @classmethod
     def parse_blog_links(cls, v: str | list) -> list[str]:
-        """blog 컬럼의 콤마 구분 링크 문자열을 리스트로 파싱."""
+        """blog 컬럼의 컴마 구분 링크 문자열을 리스트로 파싱."""
         if isinstance(v, list):
             return [link.strip() for link in v if link.strip()]
         if isinstance(v, str):

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: str
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-2.5-flash"
     gemini_max_output_tokens: int = 1024
     gemini_temperature: float = 0.3
 
