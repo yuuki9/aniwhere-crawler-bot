@@ -92,6 +92,7 @@ Swagger UI: http://localhost:8000/docs
 |--------|------|------|
 | GET | `/health` | 서버 상태 확인 |
 | POST | `/api/v1/shops/summarize` | CSV 업로드 → Gemini 요약 반환 |
+| POST | `/api/v1/shops/crawl-export` | CSV 업로드 → blog 크롤링 결과 JSON 파일 다운로드 |
 | POST | `/api/v1/shops/parse` | CSV 파싱 결과만 반환 (디버그용) |
 
 ## CSV 포맷
@@ -112,6 +113,21 @@ Swagger UI: http://localhost:8000/docs
 
 `app/utils/csv_helpers.py`의 `iter_csv_batches()`가 pandas `chunksize`를 활용해
 배치 단위로 읽습니다. 기본값은 `.env`의 `CSV_BATCH_SIZE`(기본 100행)로 조절 가능합니다.
+
+## 블로그 크롤링 파이프라인
+
+요약 엔드포인트는 아래 순서로 동작합니다.
+
+1. CSV 파싱
+2. `blog` 컬럼 URL 비동기 크롤링 (최대 `CRAWL_MAX_BLOG_LINKS`개)
+3. 페이지 텍스트 발췌 (`CRAWL_MAX_CHARS_PER_PAGE` 제한)
+4. Gemini에 발췌 텍스트 + 상점 메타데이터 전달 후 요약
+
+관련 설정(`.env`):
+
+- `CRAWL_TIMEOUT_SEC`: 요청 타임아웃(초)
+- `CRAWL_MAX_BLOG_LINKS`: 상점당 크롤링할 블로그 링크 수
+- `CRAWL_MAX_CHARS_PER_PAGE`: 페이지별 Gemini 입력 최대 문자 수
 
 ## Gemini 프롬프트 수정
 

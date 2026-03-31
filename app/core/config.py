@@ -15,13 +15,18 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: str
-    gemini_model: str = "gemini-2.5-flash"
-    gemini_max_output_tokens: int = 1024
+    gemini_model: str = "gemini-flash-latest"
+    gemini_max_output_tokens: int = 2048
     gemini_temperature: float = 0.3
 
     # CSV Processing
     csv_batch_size: int = 100
     csv_max_file_size_mb: int = 50
+
+    # Crawling
+    crawl_timeout_sec: float = 10.0
+    crawl_max_blog_links: int = 3
+    crawl_max_chars_per_page: int = 1500
 
 
 @lru_cache
