@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logger.info("서버 시작 | env=%s | model=%s", settings.app_env, settings.gemini_model)
+    logger.info("서버 시작 | env=%s", settings.app_env)
     yield
     logger.info("서버 종료")
 
@@ -26,9 +26,9 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="Aniwhere AI — 가챠/피규어샵 요약 API",
-        description="CSV로 업로드된 가챠/피규어샵 데이터를 Gemini API로 요약합니다.",
-        version="0.1.0",
+        title="Aniwhere AI — 피규어샵 데이터 수집 파이프라인",
+        description="상점 CSV를 업로드하면 네이버 블로그 검색 및 크롤링으로 Knowledge Base용 데이터를 구축합니다.",
+        version="0.2.0",
         debug=settings.app_debug,
         lifespan=lifespan,
     )

@@ -10,5 +10,4 @@ async def health_check():
     return {
         "status": "ok",
         "env": settings.app_env,
-        "model": settings.gemini_model,
     }
