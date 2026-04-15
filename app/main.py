@@ -1,10 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-from app.api import health, shops
+from app.api import health, search
 from app.core.config import get_settings
 
 logging.basicConfig(
@@ -12,6 +15,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Rate Limiter 초기화
+limiter = Limiter(key_func=get_remote_address)
 
 
 @asynccontextmanager
@@ -26,12 +32,16 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="Aniwhere AI — 피규어샵 데이터 수집 파이프라인",
-        description="상점 CSV를 업로드하면 네이버 블로그 검색 및 크롤링으로 Knowledge Base용 데이터를 구축합니다.",
-        version="0.2.0",
+        title="Aniwhere AI — 피규어샵 검색 API",
+        description="피규어/애니메이션 굿즈샵 RAG 검색 서비스",
+        version="1.0.0",
         debug=settings.app_debug,
         lifespan=lifespan,
     )
+
+    # Rate Limiter 등록
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     app.add_middleware(
         CORSMiddleware,
@@ -41,7 +51,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
-    app.include_router(shops.router, prefix="/api/v1")
+    app.include_router(search.router)
 
     return app
 
