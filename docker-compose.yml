@@ -1,4 +1,27 @@
 services:
+  # 로컬 MySQL (베스천/사설 DB 안 쓸 때만). 기본 프로필에서는 끔.
+  # 실행: docker compose --profile local-mysql up -d mysql
+  mysql:
+    profiles:
+      - local-mysql
+    image: mysql:8.0
+    container_name: aniwhere-mysql-local
+    environment:
+      MYSQL_ROOT_PASSWORD: aniwhere2026!
+      MYSQL_DATABASE: aniwhere
+    ports:
+      - "25432:3306"
+    volumes:
+      - ./init_db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - mysql-local-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-paniwhere2026!"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -8,10 +31,18 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # 컨테이너 내 Chroma 영속 경로 (named volume 과 일치)
+      CHROMA_PERSIST_PATH: /app/chromadb
     volumes:
+      # 로컬 소스가 이미지보다 우선 (rebuild 없이 db_service 등 반영)
+      - .:/app
       - ./data:/app/data
+      - ./output:/app/output
+      - ./secrets:/app/secrets:ro
       - chromadb-data:/app/chromadb
     restart: unless-stopped
 
 volumes:
   chromadb-data:
+  mysql-local-data:

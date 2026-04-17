@@ -30,5 +30,10 @@ def load_shop_records_from_csv(path: Path) -> list[ShopRecord]:
             try:
                 records.append(ShopRecord(**row))
             except Exception as exc:
-                logger.warning("CSV 행 스킵: %s", exc)
+                logger.warning("[csv] 행 스킵: %s", exc)
+        logger.info(
+            "[csv] 로드 완료 | path=%s | 유효_행=%s",
+            path.resolve(),
+            len(records),
+        )
         return records

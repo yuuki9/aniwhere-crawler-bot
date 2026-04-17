@@ -1,5 +1,7 @@
 """RAG 검색 API 엔드포인트"""
 
+import logging
+
 from fastapi import APIRouter, Query, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -7,6 +9,7 @@ from app.services.rag_service import search_shops
 
 router = APIRouter(prefix="/api/v1", tags=["RAG Search"])
 limiter = Limiter(key_func=get_remote_address)
+logger = logging.getLogger(__name__)
 
 # 입력 가드레일: 차단 키워드
 BLOCKED_KEYWORDS = [
@@ -63,10 +66,17 @@ async def search_shops_endpoint(
     """
     # 입력 검증
     validate_query(q)
-    
+    logger.info("[api] GET /api/v1/search | q_len=%s n=%s", len(q), n)
+
     # RAG 검색 실행
     try:
         result = await search_shops(q, n)
+        logger.info(
+            "[api] GET /api/v1/search | 완료 | shops_returned=%s answer_len=%s",
+            len(result.get("shops") or []),
+            len((result.get("answer") or "")),
+        )
         return result
     except Exception as e:
+        logger.exception("[api] GET /api/v1/search | 실패")
         raise HTTPException(500, f"검색 중 오류가 발생했습니다: {str(e)}")

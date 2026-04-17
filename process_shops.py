@@ -10,7 +10,7 @@
 import asyncio
 import csv
 from pathlib import Path
-from app.services.db_service import get_db_pool
+from app.services.db_service import get_db_pool, stop_mysql_ssh_tunnel
 from app.services.blog_crawl_service import crawl_blog_context
 from app.services.refine_service import refine_shop
 from app.schemas.shop import ShopRecord
@@ -68,8 +68,12 @@ async def process_one(pool, shop, idx, total):
         print(f"   ⚠️  요약 실패: {result['error']}")
         return False
 
-    rdb = result["rdb"]
-    kb_text = result.get("knowledge_base_text", "")
+    rdb = result.get("rdb")
+    if rdb is None:
+        print(f"   ⏭️  가챠/피규어샵 아님 → DB 저장 생략")
+        return True
+
+    kb_text = result.get("knowledge_base_text") or ""
     print(f"   categories={rdb.get('categories')}")
     print(f"   works={rdb.get('works')}")
     print(f"   [벡터DB] {kb_text}")
@@ -152,6 +156,7 @@ async def main():
 
     pool.close()
     await pool.wait_closed()
+    stop_mysql_ssh_tunnel()
 
     if failed:
         print(f"\n⚠️  최종 실패:")

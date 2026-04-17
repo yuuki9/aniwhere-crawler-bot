@@ -1,11 +1,14 @@
 """RAG 검색 서비스: ChromaDB + Gemini"""
 
+import logging
+
 import chromadb
 from sentence_transformers import SentenceTransformer
 from google import genai
 from app.core.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # 전역 변수
 _chroma_client = None
@@ -53,16 +56,21 @@ async def search_shops(query: str, n_results: int = 3) -> dict:
         }
     """
     # 1. 쿼리 임베딩
+    logger.info("[rag] 단계=embed_query | n_results=%s | query_len=%s", n_results, len(query))
     model = get_embedding_model()
     query_embedding = model.encode(query).tolist()
-    
+
     # 2. ChromaDB 검색
     collection = get_chroma_collection()
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results
     )
-    
+    logger.info(
+        "[rag] 단계=chroma_query | 반환_문서수=%s",
+        len(results.get("documents", [[]])[0] or []),
+    )
+
     # 3. 검색 결과 정리
     shops = []
     context = ""
@@ -72,8 +80,15 @@ async def search_shops(query: str, n_results: int = 3) -> dict:
             'content': doc
         })
         context += f"\n\n[상점 {i}]\n{doc}"
-    
+
+    logger.info(
+        "[rag] 단계=context | shop_ids=%s | context_chars=%s",
+        [s["shop_id"] for s in shops],
+        len(context),
+    )
+
     # 4. Gemini로 답변 생성 (프롬프트 가드레일 포함)
+    logger.info("[rag] 단계=gemini_generate | model=%s", settings.gemini_model)
     client = get_gemini_client()
     prompt = f"""당신은 서울 48개 피규어/애니메이션 굿즈샵 안내 전문 AI입니다.
 
@@ -98,7 +113,8 @@ async def search_shops(query: str, n_results: int = 3) -> dict:
     )
     
     answer = response.text.strip() if response.text else "답변을 생성할 수 없습니다."
-    
+    logger.info("[rag] 단계=완료 | answer_chars=%s", len(answer))
+
     return {
         "query": query,
         "shops": shops,

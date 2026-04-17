@@ -17,12 +17,21 @@ import argparse
 import asyncio
 import logging
 import sys
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from app.core.config import get_settings
 from app.services.blog_crawl_service import crawl_blog_context
 from app.services.chroma_ingest_service import upsert_shop_knowledge
-from app.services.db_service import get_db_pool, save_shop_to_db, shop_exists_by_name
+from app.services.db_service import (
+    get_db_pool,
+    save_shop_to_db,
+    shop_exists_by_name,
+    stop_mysql_ssh_tunnel,
+    upsert_shop_details,
+)
 from app.services.naver_search_service import collect_blog_urls, save_blog_csv
 from app.services.refine_service import refine_shop, save_knowledge_base_doc
 from app.utils.local_csv import load_shop_records_from_csv
@@ -32,6 +41,53 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+Outcome = Literal[
+    "saved",
+    "skip_duplicate",
+    "skip_not_figure",
+    "fail_crawl",
+    "fail_refine",
+    "fail_config",
+]
+
+
+@dataclass
+class ShopPipelineResult:
+    outcome: Outcome
+    name: str
+    shop_id: int | None = None
+    detail: str = ""
+
+    @property
+    def is_hard_fail(self) -> bool:
+        return self.outcome in ("fail_crawl", "fail_refine", "fail_config")
+
+
+def _print_shop_line(idx: int, total: int, r: ShopPipelineResult) -> None:
+    """Docker/터미널에서 한눈에 보이도록 표준 출력에 한 줄 요약."""
+    sid = f"shop_id={r.shop_id}" if r.shop_id is not None else "shop_id=-"
+    extra = f" | {r.detail}" if r.detail else ""
+    print(f"[pipeline {idx}/{total}] {r.outcome:16} | {sid} | {r.name!r}{extra}", flush=True)
+
+
+def _print_final_summary(rows: list[ShopPipelineResult]) -> None:
+    c = Counter(r.outcome for r in rows)
+    print("", flush=True)
+    print("========== 파이프라인 요약 ==========", flush=True)
+    print(
+        f"전체 {len(rows)} | 저장 saved={c['saved']} | "
+        f"건너뜀(중복)={c['skip_duplicate']} | 건너뜀(비가챠·비피규어)={c['skip_not_figure']} | "
+        f"실패 크롤={c['fail_crawl']} | 실패 refine={c['fail_refine']} | "
+        f"실패 설정={c['fail_config']}",
+        flush=True,
+    )
+    print("--------------------------------------", flush=True)
+    for i, r in enumerate(rows, 1):
+        sid = str(r.shop_id) if r.shop_id is not None else "-"
+        tail = f" {r.detail}" if r.detail else ""
+        print(f"  {i:3}. [{r.outcome}] id={sid} {r.name!r}{tail}", flush=True)
+    print("======================================", flush=True)
 
 
 async def _process_one_shop(
@@ -44,46 +100,149 @@ async def _process_one_shop(
     do_chroma: bool,
     max_blog_links: int,
     output_dir: str,
-) -> bool:
+) -> ShopPipelineResult:
     name = shop.name
-    logger.info("[%s/%s] %s", idx, total, name)
+    logger.info("[pipeline %s/%s] 시작 | shop=%r", idx, total, name)
 
     if do_mysql and await shop_exists_by_name(pool, name):
-        logger.info("  이미 MySQL에 존재 → 스킵")
-        return True
+        logger.info("[pipeline %s/%s] 단계=skip_mysql_duplicate | shop=%r", idx, total, name)
+        r = ShopPipelineResult("skip_duplicate", name, detail="이미 DB에 동일 상점명")
+        _print_shop_line(idx, total, r)
+        return r
 
     blogs = shop.blog[:max_blog_links] if shop.blog else []
-    logger.info("  크롤링 (%s개 링크)", len(blogs))
+    logger.info(
+        "[pipeline %s/%s] 단계=crawl_start | shop=%r | blog_links=%s",
+        idx,
+        total,
+        name,
+        len(blogs),
+    )
     crawl_text = await crawl_blog_context(blogs)
     if not crawl_text:
-        logger.warning("  크롤 실패 또는 빈 본문")
-        return False
+        logger.warning(
+            "[pipeline %s/%s] 단계=crawl_end | shop=%r | 실패=빈_본문",
+            idx,
+            total,
+            name,
+        )
+        r = ShopPipelineResult("fail_crawl", name, detail="블로그 본문 없음")
+        _print_shop_line(idx, total, r)
+        return r
 
-    logger.info("  Gemini refine (입력 %s자)", len(crawl_text))
+    logger.info(
+        "[pipeline %s/%s] 단계=crawl_end | shop=%r | 본문_자수=%s",
+        idx,
+        total,
+        name,
+        len(crawl_text),
+    )
+    logger.info(
+        "[pipeline %s/%s] 단계=refine_start | shop=%r | 입력_자수=%s",
+        idx,
+        total,
+        name,
+        len(crawl_text),
+    )
     result = await refine_shop(shop, crawl_text)
     if result.get("error"):
-        logger.warning("  refine 실패: %s", result["error"])
-        return False
+        err = str(result["error"])
+        logger.warning(
+            "[pipeline %s/%s] 단계=refine_end | shop=%r | 실패=%s",
+            idx,
+            total,
+            name,
+            err,
+        )
+        r = ShopPipelineResult("fail_refine", name, detail=err[:200])
+        _print_shop_line(idx, total, r)
+        return r
 
-    rdb = result["rdb"]
+    rdb = result.get("rdb")
+    if rdb is None:
+        logger.info(
+            "[pipeline %s/%s] 단계=refine_end | shop=%r | is_figure_relevant=False → 저장_생략",
+            idx,
+            total,
+            name,
+        )
+        r = ShopPipelineResult("skip_not_figure", name, detail="가챠/피규어샵 관련 아님")
+        _print_shop_line(idx, total, r)
+        return r
+
     kb = (result.get("knowledge_base_text") or "").strip()
 
     if kb:
-        save_knowledge_base_doc(name, kb, output_dir)
+        kb_path = save_knowledge_base_doc(name, kb, output_dir)
+        logger.info(
+            "[pipeline %s/%s] 단계=kb_txt | shop=%r | path=%s | 자수=%s",
+            idx,
+            total,
+            name,
+            kb_path,
+            len(kb),
+        )
+    else:
+        logger.info("[pipeline %s/%s] 단계=kb_txt | shop=%r | 생략(빈_KB)", idx, total, name)
 
     shop_id: int | None = None
     if do_mysql:
+        logger.info("[pipeline %s/%s] 단계=mysql_insert_start | shop=%r", idx, total, name)
         shop_id = await save_shop_to_db(pool, rdb)
-        logger.info("  MySQL 저장 shop_id=%s", shop_id)
+        await upsert_shop_details(
+            pool,
+            shop_id,
+            description=kb if kb else None,
+            raw_crawl_text=crawl_text,
+        )
+        logger.info(
+            "[pipeline %s/%s] 단계=mysql_insert_end | shop=%r | shop_id=%s",
+            idx,
+            total,
+            name,
+            shop_id,
+        )
     elif do_chroma and kb:
-        logger.error("  Chroma만 켜져 있고 MySQL이 꺼져 있으면 shop_id가 없습니다. --no-mysql 사용 시 --no-chroma 권장")
-        return False
+        logger.error(
+            "[pipeline %s/%s] 단계=mysql | shop=%r | 오류=MySQL_없이_Chroma_불가",
+            idx,
+            total,
+            name,
+        )
+        r = ShopPipelineResult("fail_config", name, detail="MySQL 없이 Chroma 불가")
+        _print_shop_line(idx, total, r)
+        return r
 
     if do_chroma and shop_id is not None and kb:
+        logger.info(
+            "[pipeline %s/%s] 단계=chroma_upsert_start | shop_id=%s | shop=%r",
+            idx,
+            total,
+            shop_id,
+            name,
+        )
         upsert_shop_knowledge(shop_id, kb)
-        logger.info("  Chroma upsert 완료 (shop_id=%s)", shop_id)
+        logger.info(
+            "[pipeline %s/%s] 단계=chroma_upsert_end | shop_id=%s | shop=%r",
+            idx,
+            total,
+            shop_id,
+            name,
+        )
+    elif do_chroma:
+        logger.info(
+            "[pipeline %s/%s] 단계=chroma | shop=%r | 생략 (shop_id=%s kb_non_empty=%s)",
+            idx,
+            total,
+            name,
+            shop_id,
+            bool(kb),
+        )
 
-    return True
+    logger.info("[pipeline %s/%s] 완료 | shop=%r", idx, total, name)
+    r = ShopPipelineResult("saved", name, shop_id=shop_id, detail=f"KB {len(kb)}자")
+    _print_shop_line(idx, total, r)
+    return r
 
 
 async def run_pipeline_async(args: argparse.Namespace) -> int:
@@ -96,44 +255,86 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
     if not blogs_path.is_absolute():
         blogs_path = root / blogs_path
 
+    logger.info(
+        "[pipeline] 시작 | collect=%s mysql=%s chroma=%s input=%s blogs_out=%s "
+        "max_blog_links=%s sleep_sec=%s limit=%s output_dir=%s",
+        args.collect,
+        args.mysql,
+        args.chroma,
+        input_path,
+        blogs_path,
+        args.max_blog_links or settings.pipeline_max_blog_links_crawl,
+        args.sleep if args.sleep is not None else settings.pipeline_sleep_sec,
+        args.limit,
+        settings.output_dir,
+    )
+
     records = load_shop_records_from_csv(input_path)
     if not records:
-        logger.error("상점 CSV가 비었거나 읽을 수 없습니다: %s", input_path)
+        logger.error("[pipeline] 중단 | 이유=CSV_비어있음_또는_오류 | path=%s", input_path)
         return 1
 
     if args.collect:
         if not settings.naver_client_id or not settings.naver_client_secret:
             logger.error(
-                "네이버 API 키가 없습니다 (.env에 NAVER_CLIENT_ID, NAVER_CLIENT_SECRET). "
-                "또는 --no-collect 로 이미 blog가 채워진 CSV를 지정하세요."
+                "[pipeline] 중단 | 이유=네이버_API_키_없음 (.env NAVER_CLIENT_ID/SECRET)"
             )
             return 1
-        logger.info("네이버 블로그 URL 수집 → %s", blogs_path)
+        logger.info(
+            "[pipeline] 단계=naver_collect | 상점수=%s | 저장예정=%s",
+            len(records),
+            blogs_path,
+        )
         rows = await collect_blog_urls(records)
         blogs_path.parent.mkdir(parents=True, exist_ok=True)
         save_blog_csv(rows, str(blogs_path))
         records = load_shop_records_from_csv(blogs_path)
+        logger.info(
+            "[pipeline] 단계=csv_reload_after_naver | path=%s | 상점수=%s",
+            blogs_path,
+            len(records),
+        )
     else:
         if not input_path.exists():
-            logger.error("입력 파일 없음: %s", input_path)
+            logger.error("[pipeline] 중단 | 이유=입력파일_없음 | path=%s", input_path)
             return 1
+        logger.info(
+            "[pipeline] 단계=csv_load | path=%s | 상점수=%s",
+            input_path,
+            len(records),
+        )
         records = load_shop_records_from_csv(input_path)
 
     if not records:
-        logger.error("처리할 상점이 없습니다.")
+        logger.error("[pipeline] 중단 | 이유=처리할_상점_없음")
         return 1
+
+    if args.limit is not None:
+        if args.limit < 1:
+            logger.error("[pipeline] 중단 | --limit 은 1 이상이어야 합니다 (받은 값=%s)", args.limit)
+            return 1
+        records = records[: args.limit]
+        logger.info(
+            "[pipeline] 단계=limit | CSV_앞에서_%s건만_처리 | 실제_상점수=%s",
+            args.limit,
+            len(records),
+        )
+
+    logger.info("[pipeline] 단계=shop_loop | 총_상점=%s", len(records))
 
     pool = None
     if args.mysql:
+        logger.info("[pipeline] 단계=mysql_pool | 연결_시도")
         pool = await get_db_pool()
+        logger.info("[pipeline] 단계=mysql_pool | 연결_완료")
 
     max_links = args.max_blog_links or settings.pipeline_max_blog_links_crawl
     sleep_sec = args.sleep if args.sleep is not None else settings.pipeline_sleep_sec
 
-    ok, fail = 0, 0
+    results: list[ShopPipelineResult] = []
     try:
         for i, shop in enumerate(records, 1):
-            success = await _process_one_shop(
+            r = await _process_one_shop(
                 pool,
                 shop,
                 i,
@@ -143,18 +344,31 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
                 max_blog_links=max_links,
                 output_dir=settings.output_dir,
             )
-            if success:
-                ok += 1
-            else:
-                fail += 1
+            results.append(r)
             if i < len(records) and sleep_sec > 0:
+                logger.info(
+                    "[pipeline] 단계=rate_limit_sleep | 다음까지_대기=%ss (%s/%s)",
+                    sleep_sec,
+                    i,
+                    len(records),
+                )
                 await asyncio.sleep(sleep_sec)
     finally:
         if pool is not None:
+            logger.info("[pipeline] 단계=mysql_pool | 종료")
             pool.close()
             await pool.wait_closed()
+        stop_mysql_ssh_tunnel()
 
-    logger.info("완료: 성공 %s / 실패 %s / 전체 %s", ok, fail, len(records))
+    fail = sum(1 for r in results if r.is_hard_fail)
+    soft_ok = len(results) - fail
+    logger.info(
+        "[pipeline] 종료 | 하드실패=%s 그외완료=%s 전체=%s",
+        fail,
+        soft_ok,
+        len(records),
+    )
+    _print_final_summary(results)
     return 0 if fail == 0 else 2
 
 
@@ -196,6 +410,13 @@ def main() -> None:
         type=int,
         default=None,
         help="크롤에 사용할 블로그 링크 상한. 미지정 시 pipeline_max_blog_links_crawl",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="CSV 상단부터 N개 상점만 처리 (디버그·부분 실행용)",
     )
     args = parser.parse_args()
     args.collect = not args.no_collect

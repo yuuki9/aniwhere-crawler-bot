@@ -19,6 +19,10 @@ env/
 .env.*
 !.env.example
 
+# SSH keys (Docker는 ./secrets 마운트)
+secrets/*
+!secrets/.gitkeep
+
 # Data (샘플 제외)
 data/
 !data/samples/

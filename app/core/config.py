@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     mysql_password: str = "aniwhere2026!"
     mysql_database: str = "aniwhere"
 
+    # MySQL → 베스천 SSH 터널 (True면 mysql_host/mysql_port 는 베스천 기준 사설 DB 주소)
+    mysql_use_ssh_tunnel: bool = False
+    mysql_ssh_bastion: str = ""
+    mysql_ssh_bastion_port: int = 22
+    mysql_ssh_username: str = ""
+    mysql_ssh_private_key: str = ""
+    mysql_ssh_private_key_password: str = ""
+
     # S3
     s3_bucket_name: str = "aniwhere-knowledge-base"
 

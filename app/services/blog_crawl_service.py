@@ -209,10 +209,18 @@ async def crawl_blog_details(blog_urls: list[str]) -> list[dict[str, Any]]:
     - error: 오류 메시지 (실패 시)
     """
     if not blog_urls:
+        logger.info("[crawl] 단계=details | 링크=0 → 스킵")
         return []
 
     settings = get_settings()
     urls = blog_urls[: settings.crawl_max_blog_links]
+    logger.info(
+        "[crawl] 단계=details_start | 요청_링크=%s (상한=%s) | 타임아웃=%ss | 페이지당_최대자수=%s",
+        len(urls),
+        settings.crawl_max_blog_links,
+        settings.crawl_timeout_sec,
+        settings.crawl_max_chars_per_page,
+    )
 
     timeout = httpx.Timeout(settings.crawl_timeout_sec)
     headers = {
@@ -224,7 +232,31 @@ async def crawl_blog_details(blog_urls: list[str]) -> list[dict[str, Any]]:
             _fetch_one(client, url=u, max_chars=settings.crawl_max_chars_per_page)
             for u in urls
         ]
-        return list(await asyncio.gather(*tasks))
+        results = list(await asyncio.gather(*tasks))
+    ok = sum(1 for r in results if r.get("success"))
+    fail = len(results) - ok
+    text_chars = sum(len(r.get("text") or "") for r in results if r.get("success"))
+    logger.info(
+        "[crawl] 단계=details_end | 성공=%s 실패=%s | 추출_총자수(성공분)=%s",
+        ok,
+        fail,
+        text_chars,
+    )
+    for r in results:
+        if r.get("success"):
+            logger.debug(
+                "[crawl] url=%s status=%s text_chars=%s",
+                r.get("url"),
+                r.get("status_code"),
+                len(r.get("text") or ""),
+            )
+        else:
+            logger.debug(
+                "[crawl] url=%s 실패=%s",
+                r.get("url"),
+                r.get("error"),
+            )
+    return results
 
 
 async def crawl_blog_context(blog_urls: list[str]) -> str:
@@ -236,6 +268,7 @@ async def crawl_blog_context(blog_urls: list[str]) -> str:
     """
     details = await crawl_blog_details(blog_urls)
     if not details:
+        logger.info("[crawl] 단계=context | 결과=빈_details → placeholder_문구_반환")
         return "수집된 블로그 본문 없음"
 
     chunks: list[str] = []
@@ -245,4 +278,10 @@ async def crawl_blog_context(blog_urls: list[str]) -> str:
         else:
             chunks.append(f"[{item['url']}] 접근 실패: {item['error']}")
 
-    return "\n".join(chunks)
+    merged = "\n".join(chunks)
+    logger.info(
+        "[crawl] 단계=context_end | 합친_문맥_자수=%s | 블록수=%s",
+        len(merged),
+        len(chunks),
+    )
+    return merged

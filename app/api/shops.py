@@ -1,4 +1,4 @@
-"""하비숍 CSV 업로드 및 데이터 수집 엔드포인트."""
+"""가챠/피규어샵 CSV 업로드 및 데이터 수집 엔드포인트."""
 
 import json
 import logging
@@ -27,7 +27,9 @@ router = APIRouter(prefix="/shops", tags=["shops"])
 async def parse_csv_only(
     file: UploadFile = File(...),
 ):
+    logger.info("[api] POST /shops/parse | 시작")
     records = await parse_upload_to_records(file)
+    logger.info("[api] POST /shops/parse | 완료 | records=%s", len(records))
     return JSONResponse(
         content={
             "total": len(records),
@@ -47,10 +49,13 @@ async def parse_csv_only(
 async def crawl_export_from_csv(
     file: UploadFile = File(..., description="가챠/피규어샵 정보가 담긴 CSV 파일"),
 ):
+    logger.info("[api] POST /shops/crawl-export | 시작")
     records = await parse_upload_to_records(file)
+    logger.info("[api] POST /shops/crawl-export | 상점 루프 | count=%s", len(records))
 
     export_rows = []
     for record in records:
+        logger.info("[api] crawl-export | 상점=%r | blog_링크수=%s", record.name, len(record.blog or []))
         crawled = await crawl_blog_details(record.blog)
         export_rows.append(
             {
@@ -69,6 +74,11 @@ async def crawl_export_from_csv(
     raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     filename = f"crawl_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
+    logger.info(
+        "[api] POST /shops/crawl-export | 완료 | shops=%s | file=%s",
+        len(export_rows),
+        filename,
+    )
     return StreamingResponse(
         BytesIO(raw),
         media_type="application/json; charset=utf-8",
@@ -92,11 +102,17 @@ async def collect_blog_urls_from_csv(
     ),
 ):
     settings = get_settings()
+    logger.info("[api] POST /shops/collect-blog-urls | 시작 | output_path=%s", output_path)
     records = await parse_upload_to_records(file)
     rows = await collect_blog_urls(records)
 
     save_path = output_path or f"{settings.output_dir}/shop_with_blogs.csv"
     saved = save_blog_csv(rows, save_path)
+    logger.info(
+        "[api] POST /shops/collect-blog-urls | 완료 | rows=%s | saved=%s",
+        len(rows),
+        saved,
+    )
 
     return JSONResponse(
         content={
@@ -112,16 +128,26 @@ async def refine_from_csv(
     file: UploadFile = File(...),
 ):
     settings = get_settings()
+    logger.info("[api] POST /shops/refine | 시작")
     records = await parse_upload_to_records(file)
     results = []
 
-    for record in records:
+    for i, record in enumerate(records, 1):
+        logger.info(
+            "[api] refine | %s/%s | 상점=%r | blog_링크수=%s",
+            i,
+            len(records),
+            record.name,
+            len(record.blog or []),
+        )
         crawl_text = await crawl_blog_context(record.blog)
         refined = await refine_shop(record, crawl_text)
 
-        if refined["knowledge_base_text"] and not refined["error"]:
-            save_knowledge_base_doc(record.name, refined["knowledge_base_text"], settings.output_dir)
+        kb = refined.get("knowledge_base_text")
+        if kb and str(kb).strip() and not refined["error"]:
+            save_knowledge_base_doc(record.name, str(kb).strip(), settings.output_dir)
 
         results.append({"name": record.name, **refined})
 
+    logger.info("[api] POST /shops/refine | 완료 | total=%s", len(results))
     return JSONResponse(content={"total": len(results), "results": results})

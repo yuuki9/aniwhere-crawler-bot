@@ -46,11 +46,16 @@ async def collect_blog_urls(records: list[ShopRecord]) -> list[dict]:
     blog 필드가 채워진 딕셔너리 리스트를 반환한다.
     """
     settings = get_settings()
+    logger.info(
+        "[naver] 단계=blog_search_start | 상점수=%s | display=%s",
+        len(records),
+        settings.naver_blog_results_per_shop,
+    )
     async with httpx.AsyncClient(timeout=10.0) as client:
         tasks = [search_blog_urls(client, r.name) for r in records]
         results = await asyncio.gather(*tasks)
 
-    return [
+    rows = [
         {
             "address": r.address,
             "name": r.name,
@@ -60,6 +65,15 @@ async def collect_blog_urls(records: list[ShopRecord]) -> list[dict]:
         }
         for r, urls in zip(records, results)
     ]
+    total_urls = sum(len(u) for u in results)
+    zero_url_shops = sum(1 for u in results if len(u) == 0)
+    logger.info(
+        "[naver] 단계=blog_search_end | 수집_URL_총개수=%s | URL없는_상점=%s/%s",
+        total_urls,
+        zero_url_shops,
+        len(records),
+    )
+    return rows
 
 
 def save_blog_csv(rows: list[dict], output_path: str) -> Path:

@@ -25,6 +25,12 @@ async def parse_upload_to_records(file: UploadFile) -> list[ShopRecord]:
     # 파일 크기 사전 검사 (Content-Length 헤더 기반 빠른 거부)
     max_bytes = settings.csv_max_file_size_mb * 1024 * 1024
     file_bytes = await file.read()
+    logger.info(
+        "[api/csv] 업로드 수신 | filename=%s | size_bytes=%s | batch_size=%s",
+        getattr(file, "filename", None),
+        len(file_bytes),
+        settings.csv_batch_size,
+    )
     if len(file_bytes) > max_bytes:
         raise FileTooLargeError(max_mb=settings.csv_max_file_size_mb)
 
@@ -59,5 +65,9 @@ async def parse_upload_to_records(file: UploadFile) -> list[ShopRecord]:
     if parse_errors:
         logger.warning("총 %d개 행에서 파싱 오류 발생", len(parse_errors))
 
-    logger.info("CSV 파싱 완료: 총 %d건 (오류 %d건)", len(records), len(parse_errors))
+    logger.info(
+        "[api/csv] 파싱 완료 | records=%s | parse_errors=%s",
+        len(records),
+        len(parse_errors),
+    )
     return records
