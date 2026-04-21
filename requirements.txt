@@ -13,6 +13,7 @@ paramiko>=2.12.0,<3.0.0
 httpx>=0.27.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+pandas>=2.2.0
 
 # RAG (CPU only)
 chromadb>=0.4.22

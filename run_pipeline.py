@@ -9,6 +9,7 @@ data/shop.csv 기준 전체 파이프라인 (CLI)
   python run_pipeline.py
   python run_pipeline.py --no-collect --input data/shop_with_blogs.csv
   python run_pipeline.py --no-mysql --no-chroma
+  python run_pipeline.py --update-existing   # DB·Chroma 재생성 시 기존 shop_id PK와 Chroma 문서 id(str) 유지
 """
 
 from __future__ import annotations
@@ -27,9 +28,11 @@ from app.services.blog_crawl_service import crawl_blog_context
 from app.services.chroma_ingest_service import upsert_shop_knowledge
 from app.services.db_service import (
     get_db_pool,
+    get_shop_id_by_name,
     save_shop_to_db,
     shop_exists_by_name,
     stop_mysql_ssh_tunnel,
+    update_shop_in_db,
     upsert_shop_details,
 )
 from app.services.naver_search_service import collect_blog_urls, save_blog_csv
@@ -98,13 +101,14 @@ async def _process_one_shop(
     *,
     do_mysql: bool,
     do_chroma: bool,
+    update_existing: bool,
     max_blog_links: int,
     output_dir: str,
 ) -> ShopPipelineResult:
     name = shop.name
     logger.info("[pipeline %s/%s] 시작 | shop=%r", idx, total, name)
 
-    if do_mysql and await shop_exists_by_name(pool, name):
+    if do_mysql and await shop_exists_by_name(pool, name) and not update_existing:
         logger.info("[pipeline %s/%s] 단계=skip_mysql_duplicate | shop=%r", idx, total, name)
         r = ShopPipelineResult("skip_duplicate", name, detail="이미 DB에 동일 상점명")
         _print_shop_line(idx, total, r)
@@ -186,9 +190,24 @@ async def _process_one_shop(
         logger.info("[pipeline %s/%s] 단계=kb_txt | shop=%r | 생략(빈_KB)", idx, total, name)
 
     shop_id: int | None = None
+    persist_mysql_kind = ""
     if do_mysql:
-        logger.info("[pipeline %s/%s] 단계=mysql_insert_start | shop=%r", idx, total, name)
-        shop_id = await save_shop_to_db(pool, rdb)
+        existing_sid = await get_shop_id_by_name(pool, name)
+        if existing_sid is not None:
+            persist_mysql_kind = "갱신"
+            logger.info(
+                "[pipeline %s/%s] 단계=mysql_update_start | shop=%r | shop_id=%s (기존 PK 유지)",
+                idx,
+                total,
+                name,
+                existing_sid,
+            )
+            await update_shop_in_db(pool, existing_sid, rdb)
+            shop_id = existing_sid
+        else:
+            persist_mysql_kind = "신규"
+            logger.info("[pipeline %s/%s] 단계=mysql_insert_start | shop=%r", idx, total, name)
+            shop_id = await save_shop_to_db(pool, rdb)
         await upsert_shop_details(
             pool,
             shop_id,
@@ -196,7 +215,7 @@ async def _process_one_shop(
             raw_crawl_text=crawl_text,
         )
         logger.info(
-            "[pipeline %s/%s] 단계=mysql_insert_end | shop=%r | shop_id=%s",
+            "[pipeline %s/%s] 단계=mysql_persist_end | shop=%r | shop_id=%s",
             idx,
             total,
             name,
@@ -215,7 +234,7 @@ async def _process_one_shop(
 
     if do_chroma and shop_id is not None and kb:
         logger.info(
-            "[pipeline %s/%s] 단계=chroma_upsert_start | shop_id=%s | shop=%r",
+            "[pipeline %s/%s] 단계=chroma_upsert_start | shop_id=%s (문서 id 동일) | shop=%r",
             idx,
             total,
             shop_id,
@@ -240,7 +259,10 @@ async def _process_one_shop(
         )
 
     logger.info("[pipeline %s/%s] 완료 | shop=%r", idx, total, name)
-    r = ShopPipelineResult("saved", name, shop_id=shop_id, detail=f"KB {len(kb)}자")
+    kb_detail = f"KB {len(kb)}자"
+    if persist_mysql_kind:
+        kb_detail = f"{kb_detail} [{persist_mysql_kind}]"
+    r = ShopPipelineResult("saved", name, shop_id=shop_id, detail=kb_detail)
     _print_shop_line(idx, total, r)
     return r
 
@@ -256,11 +278,12 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
         blogs_path = root / blogs_path
 
     logger.info(
-        "[pipeline] 시작 | collect=%s mysql=%s chroma=%s input=%s blogs_out=%s "
+        "[pipeline] 시작 | collect=%s mysql=%s chroma=%s update_existing=%s input=%s blogs_out=%s "
         "max_blog_links=%s sleep_sec=%s limit=%s output_dir=%s",
         args.collect,
         args.mysql,
         args.chroma,
+        args.update_existing,
         input_path,
         blogs_path,
         args.max_blog_links or settings.pipeline_max_blog_links_crawl,
@@ -341,6 +364,7 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
                 len(records),
                 do_mysql=args.mysql,
                 do_chroma=args.chroma,
+                update_existing=args.update_existing,
                 max_blog_links=max_links,
                 output_dir=settings.output_dir,
             )
@@ -418,10 +442,19 @@ def main() -> None:
         metavar="N",
         help="CSV 상단부터 N개 상점만 처리 (디버그·부분 실행용)",
     )
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help="DB에 이미 있는 상점명이면 스킵하지 않고 재크롤·재정제 후 같은 shop_id로 MySQL 갱신 + Chroma ids=str(shop_id) upsert",
+    )
     args = parser.parse_args()
     args.collect = not args.no_collect
     args.mysql = not args.no_mysql
     args.chroma = not args.no_chroma
+    # --update-existing은 MySQL 대상일 때만 의미 있음
+    if args.update_existing and not args.mysql:
+        logger.error("--update-existing 은 MySQL을 끄면 사용할 수 없습니다.")
+        sys.exit(1)
 
     if args.input is None:
         args.input = "data/shop_with_blogs.csv" if args.no_collect else "data/shop.csv"

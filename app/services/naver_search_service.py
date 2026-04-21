@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def search_blog_urls(client: httpx.AsyncClient, shop_name: str) -> list[str]:
-    """단일 상점명으로 네이버 블로그 검색 후 URL 리스트 반환."""
+    """단일 상점명으로 네이버 블로그 검색 후 URL 리스트 반환. 429 시 백오프 재시도."""
     settings = get_settings()
     params = {
         "query": shop_name,
@@ -26,18 +26,37 @@ async def search_blog_urls(client: httpx.AsyncClient, shop_name: str) -> list[st
         "X-Naver-Client-Id": settings.naver_client_id,
         "X-Naver-Client-Secret": settings.naver_client_secret,
     }
-    try:
-        resp = await client.get(
-            "https://openapi.naver.com/v1/search/blog.json",
-            params=params,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        return [item["link"] for item in items]
-    except Exception as e:
-        logger.warning("네이버 블로그 검색 실패 (shop=%s): %s", shop_name, e)
-        return []
+    max_attempts = 8
+    for attempt in range(max_attempts):
+        try:
+            resp = await client.get(
+                "https://openapi.naver.com/v1/search/blog.json",
+                params=params,
+                headers=headers,
+            )
+            if resp.status_code == 429:
+                ra = resp.headers.get("Retry-After")
+                if ra and ra.isdigit():
+                    wait = float(ra)
+                else:
+                    wait = min(2.0**attempt, 60.0) + 0.5
+                logger.warning(
+                    "[naver] 429 Too Many Requests | shop=%r | 대기=%.1fs (%s/%s)",
+                    shop_name,
+                    wait,
+                    attempt + 1,
+                    max_attempts,
+                )
+                await asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            return [item["link"] for item in items]
+        except Exception as e:
+            logger.warning("네이버 블로그 검색 실패 (shop=%s): %s", shop_name, e)
+            return []
+    logger.warning("[naver] 재시도 소진 (shop=%r)", shop_name)
+    return []
 
 
 async def collect_blog_urls(records: list[ShopRecord]) -> list[dict]:
@@ -51,9 +70,15 @@ async def collect_blog_urls(records: list[ShopRecord]) -> list[dict]:
         len(records),
         settings.naver_blog_results_per_shop,
     )
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        tasks = [search_blog_urls(client, r.name) for r in records]
-        results = await asyncio.gather(*tasks)
+    # 동시 요청 시 네이버 429 빈발 → 상점별 순차 + 요청 간 짧은 간격
+    pace_sec = 0.35
+    results: list[list[str]] = []
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for i, r in enumerate(records):
+            urls = await search_blog_urls(client, r.name)
+            results.append(urls)
+            if i + 1 < len(records):
+                await asyncio.sleep(pace_sec)
 
     rows = [
         {

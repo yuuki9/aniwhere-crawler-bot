@@ -40,83 +40,133 @@ def get_gemini_client():
     return _gemini_client
 
 
-async def search_shops(query: str, n_results: int = 3) -> dict:
+def _shops_non_empty(shops: list) -> bool:
+    return bool(shops) and any((s.get("content") or "").strip() for s in shops)
+
+
+# Gemini 프롬프트 내 거절 규칙 한 덩어리 (100자 미만)
+_RAG_REJECT_GUIDE = (
+    "정치·종교·법·의료·투자·IT·날씨·부동산·일상·무관 연예 등 비애니·배송·음란은 거절, "
+    "해당 시 짧게 거절 후 예시 질문 제안."
+)
+
+
+def _prompt_chroma_rag(query: str, context: str) -> str:
+    return f"""애니·굿즈 안내 AI. 캐릭터·작품·굿즈·문서에 있는 매장·주소만. 없는 매장·주소 금지. 배송 안내 금지.
+[거절] {_RAG_REJECT_GUIDE}
+
+질문: {query}
+[참고 문서]{context}
+문서 우선, 한국어로 답변."""
+
+
+def _prompt_gemini_only(query: str) -> str:
+    return f"""애니·굿즈 안내 AI. 캐릭터·작품·굿즈 일반지식만. DB 없는 매장 주소·재고 단정 금지. 배송 안내 금지.
+[거절] {_RAG_REJECT_GUIDE}
+
+질문: {query}
+KB 없음, 일반지식만. 한국어로 답변."""
+
+
+async def search_shops(query: str) -> dict:
     """
-    RAG 검색: 쿼리 → 유사 상점 검색 → Gemini 답변 생성
-    
-    Args:
-        query: 사용자 질문 (예: "홍대 진격의 거인")
-        n_results: 반환할 상점 수
-    
+    RAG 검색: 쿼리 → ChromaDB 전체 문서 유사도 순 → (걸리는 문서만) Gemini
+
+    `RAG_CHROMA_MAX_DISTANCE`가 설정된 경우 거리가 그 이하인 문서만 shops·컨텍스트에 포함.
+
     Returns:
-        {
-            "query": "홍대 진격의 거인",
-            "shops": [...],
-            "answer": "..."
-        }
+        query, document_ids, shops, answer, chroma_used
     """
     # 1. 쿼리 임베딩
-    logger.info("[rag] 단계=embed_query | n_results=%s | query_len=%s", n_results, len(query))
+    logger.info("[rag] 단계=embed_query | query_len=%s", len(query))
     model = get_embedding_model()
     query_embedding = model.encode(query).tolist()
 
-    # 2. ChromaDB 검색
+    # 2. ChromaDB: 컬렉션 전체를 유사도 순으로 조회 (상한 없음 — 문서 수만큼)
     collection = get_chroma_collection()
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results
-    )
-    logger.info(
-        "[rag] 단계=chroma_query | 반환_문서수=%s",
-        len(results.get("documents", [[]])[0] or []),
-    )
+    n_total = collection.count()
+    if n_total <= 0:
+        row_docs, row_metas, row_ids, row_dist = [], [], [], []
+    else:
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_total,
+        )
+        row_docs = results["documents"][0]
+        row_metas = results["metadatas"][0]
+        row_ids = results.get("ids", [[]])[0] or []
+        row_dist = (results.get("distances") or [[]])[0]
 
-    # 3. 검색 결과 정리
-    shops = []
-    context = ""
-    for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0]), 1):
+    logger.info("[rag] 단계=chroma_query | 컬렉션=%s | 반환_문서수=%s", n_total, len(row_docs))
+
+    # 3. 검색 결과 정리 (Chroma 문서 id = upsert 시 사용한 id, shop_id 문자열과 동일)
+    shops: list[dict] = []
+    for i, doc in enumerate(row_docs):
+        metadata = row_metas[i]
+        chroma_id = row_ids[i] if i < len(row_ids) else str(metadata.get("shop_id", ""))
+        dist = row_dist[i] if row_dist is not None and i < len(row_dist) else None
         shops.append({
-            'shop_id': metadata['shop_id'],
-            'content': doc
+            "document_id": chroma_id,
+            "shop_id": metadata["shop_id"],
+            "distance": dist,
+            "content": doc,
         })
-        context += f"\n\n[상점 {i}]\n{doc}"
+
+    max_d = settings.rag_chroma_max_distance
+    if max_d is not None:
+        before = len(shops)
+        shops = [
+            s
+            for s in shops
+            if s["distance"] is None or float(s["distance"]) <= max_d
+        ]
+        logger.info(
+            "[rag] 단계=chroma_filter | max_distance=%s | 유지=%s/%s",
+            max_d,
+            len(shops),
+            before,
+        )
+
+    document_ids: list[str] = []
+    context = ""
+    for i, s in enumerate(shops):
+        document_ids.append(s["document_id"])
+        context += f"\n\n[상점 {i + 1} | 문서 id={s['document_id']}]\n{s['content']}"
+
+    chroma_used = _shops_non_empty(shops)
+    if not chroma_used:
+        context = ""
+        shops = []
+        document_ids = []
 
     logger.info(
-        "[rag] 단계=context | shop_ids=%s | context_chars=%s",
-        [s["shop_id"] for s in shops],
+        "[rag] 단계=context | chroma_used=%s | document_ids=%s | context_chars=%s",
+        chroma_used,
+        document_ids,
         len(context),
     )
 
-    # 4. Gemini로 답변 생성 (프롬프트 가드레일 포함)
-    logger.info("[rag] 단계=gemini_generate | model=%s", settings.gemini_model)
+    # 4. Gemini
+    logger.info(
+        "[rag] 단계=gemini_generate | model=%s | mode=%s",
+        settings.gemini_model,
+        "chroma_rag" if chroma_used else "gemini_only",
+    )
     client = get_gemini_client()
-    prompt = f"""당신은 서울 48개 피규어/애니메이션 굿즈샵 안내 전문 AI입니다.
+    prompt = _prompt_chroma_rag(query, context) if chroma_used else _prompt_gemini_only(query)
 
-[중요 규칙]
-1. 피규어/애니메이션/굿즈/가챠 관련 질문만 답변하세요
-2. 정치/종교/성인 콘텐츠 질문은 "피규어샵 관련 질문만 답변 가능합니다"라고 응답하세요
-3. 제공된 상점 정보에 없는 내용은 추측하지 마세요
-4. 상점명, 주소, 특징을 정확히 전달하세요
-
-사용자 질문: {query}
-
-관련 상점 정보:{context}
-
-위 정보를 바탕으로 사용자 질문에 친절하게 답변해주세요.
-- 상점명, 주소, 특징을 포함하세요
-- 여러 상점이 있으면 모두 소개하세요
-- 자연스러운 한국어로 작성하세요"""
-    
     response = await client.aio.models.generate_content(
         model=settings.gemini_model,
         contents=prompt
     )
-    
+
     answer = response.text.strip() if response.text else "답변을 생성할 수 없습니다."
     logger.info("[rag] 단계=완료 | answer_chars=%s", len(answer))
 
     return {
         "query": query,
+        "chroma_used": chroma_used,
+        "document_ids": document_ids,
         "shops": shops,
-        "answer": answer
+        "answer": answer,
     }

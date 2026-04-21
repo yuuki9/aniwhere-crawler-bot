@@ -1,6 +1,7 @@
 """로컬 CSV 파일에서 ShopRecord 목록을 로드한다."""
 
 import csv
+import io
 import logging
 from pathlib import Path
 
@@ -8,14 +9,31 @@ from app.schemas.shop import ShopRecord
 
 logger = logging.getLogger(__name__)
 
+_CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp949", "euc-kr")
+
+
+def _decode_csv_text(path: Path) -> str:
+    raw = path.read_bytes()
+    for enc in _CSV_ENCODINGS:
+        try:
+            text = raw.decode(enc)
+            if enc not in ("utf-8-sig", "utf-8"):
+                logger.info("[csv] 인코딩=%s | path=%s", enc, path)
+            return text
+        except UnicodeDecodeError:
+            continue
+    logger.warning("[csv] 인코딩 폴백=utf-8(replace) | path=%s", path)
+    return raw.decode("utf-8", errors="replace")
+
 
 def load_shop_records_from_csv(path: Path) -> list[ShopRecord]:
     """
-    UTF-8 BOM 허용. 필수: address, name, px, py.
+    UTF-8 / CP949 등 자동 시도. 필수: address, name, px, py.
     blog 미존재 시 빈 값으로 간주한다.
     """
     path = Path(path)
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    text = _decode_csv_text(path)
+    with io.StringIO(text, newline="") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames:
             return []

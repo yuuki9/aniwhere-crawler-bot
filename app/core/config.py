@@ -59,6 +59,9 @@ class Settings(BaseSettings):
 
     # ChromaDB (RAG / 파이프라인 공통)
     chroma_persist_path: str = "chromadb"
+    # RAG: Chroma 최상위 결과 거리가 이 값보다 크면(덜 유사하면) 컨텍스트 없이 Gemini만 사용.
+    # None이면(기본) 빈 문서가 아닌 한 Chroma 결과를 항상 컨텍스트로 사용.
+    rag_chroma_max_distance: float | None = None
 
     # 로컬 파이프라인 (run_pipeline.py)
     pipeline_sleep_sec: float = 15.0
