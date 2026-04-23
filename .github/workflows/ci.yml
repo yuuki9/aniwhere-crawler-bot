@@ -1,0 +1,42 @@
+# Docker 빌드로 의존성 + Dockerfile 스모크 (배포와 동일한 경로)
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - ".github/workflows/ci.yml"
+      - ".dockerignore"
+      - "embed_to_chromadb.py"
+      - "process_shops.py"
+      - "run_pipeline.py"
+      - "retry_failed.py"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - ".github/workflows/ci.yml"
+      - ".dockerignore"
+      - "embed_to_chromadb.py"
+      - "process_shops.py"
+      - "run_pipeline.py"
+      - "retry_failed.py"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker build
+        run: |
+          set -euo pipefail
+          docker build -t aniwhere-crawler-bot:ci .

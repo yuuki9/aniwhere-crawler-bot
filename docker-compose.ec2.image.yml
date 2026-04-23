@@ -1,0 +1,21 @@
+# EC2: GitHub Actions 가 빌드한 이미지를 docker load 한 뒤 이 파일로 기동 (Docker Hub 없이)
+# 프라이빗 서브넷이면 app ↔ DB 는 직접 연결(SSH 터널/PEM 은 로컬 개발용 — .env.example 참고).
+# ./data, ./output, Chroma 는 볼륨으로 유지
+services:
+  aniwhere-crawler:
+    image: aniwhere-crawler-bot:latest
+    container_name: aniwhere-crawler-bot
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      CHROMA_PERSIST_PATH: /app/chromadb
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - chromadb-data:/app/chromadb
+    restart: unless-stopped
+
+volumes:
+  chromadb-data:
