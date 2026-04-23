@@ -12,6 +12,11 @@
 #   또는 CRAWLER_ENV_B64 생략 시 aniwhere server 와 동일 DB 시크릿으로 최소 .env (MySQL 직접, 터널 끔):
 #   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
 #
+# Chroma 임베딩 산출물(EC2 로 복사됨) — 택 1:
+#   - 저장소에 ./chromadb 가 포함된 채로 push (로컬 임베딩 후 커밋), 또는
+#   - 비밀 CHROMADB_S3_OBJECT_KEY: AWS_S3_BUCKET 내 객체 키 (예: aniwhere-crawler-bot/chromadb/latest.tar.gz).
+#     로컬: tar -czvf chromadb.tgz chromadb && aws s3 cp chromadb.tgz s3://$BUCKET/$KEY
+#
 # Private EC2 는 S3 presigned URL 받으려면 아웃바운드 HTTPS (NAT/VPC endpoint).
 #
 # Triggers: push main when app/** 등 변경; workflow_dispatch
@@ -32,6 +37,8 @@ on:
       - "process_shops.py"
       - "run_pipeline.py"
       - "retry_failed.py"
+      - "output/knowledge_base/**"
+      - "chromadb/**"
   workflow_dispatch:
 
 permissions:
@@ -69,7 +76,26 @@ jobs:
           B64=$(printf '%s' "$PRESIGN" | base64 -w0)
           echo "presign_b64=$B64" >> "${GITHUB_OUTPUT}"
 
-      - name: Copy compose file to EC2
+      - name: Prepare ChromaDB tarball for EC2
+        env:
+          BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          CHROMADB_S3_OBJECT_KEY: ${{ secrets.CHROMADB_S3_OBJECT_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -d chromadb ] && [ -n "$(ls -A chromadb 2>/dev/null || true)" ]; then
+            echo "ChromaDB: packaging chromadb/ from repository"
+            tar -czf /tmp/chromadb-deploy.tgz chromadb
+          elif [ -n "${CHROMADB_S3_OBJECT_KEY:-}" ]; then
+            echo "ChromaDB: downloading s3://${BUCKET}/${CHROMADB_S3_OBJECT_KEY}"
+            aws s3 cp "s3://${BUCKET}/${CHROMADB_S3_OBJECT_KEY}" /tmp/chromadb-deploy.tgz --region "${AWS_REGION}"
+          else
+            echo "::error::ChromaDB missing. Either commit a non-empty ./chromadb directory, or set GitHub secret CHROMADB_S3_OBJECT_KEY (key inside AWS_S3_BUCKET)."
+            exit 1
+          fi
+          ls -la /tmp/chromadb-deploy.tgz
+
+      - name: Copy compose and ChromaDB tarball to EC2
         uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.EC2_PRIVATE_IP }}
@@ -78,10 +104,10 @@ jobs:
           proxy_host: ${{ secrets.BASTION_HOST }}
           proxy_username: ${{ secrets.BASTION_USER }}
           proxy_key: ${{ secrets.EC2_SSH_KEY }}
-          source: "docker-compose.ec2.image.yml"
+          source: "docker-compose.ec2.image.yml,/tmp/chromadb-deploy.tgz"
           target: "/home/${{ secrets.EC2_USER }}/aniwhere-crawler-bot/"
-          timeout: 60s
-          command_timeout: 10m
+          timeout: 120s
+          command_timeout: 30m
 
       - name: Deploy on private EC2
         uses: appleboy/ssh-action@v1.2.0
@@ -108,6 +134,9 @@ jobs:
             REMOTE_DIR="/home/${{ secrets.EC2_USER }}/aniwhere-crawler-bot"
             mkdir -p "$REMOTE_DIR"/data "$REMOTE_DIR"/output
             cd "$REMOTE_DIR"
+            rm -rf "$REMOTE_DIR/chromadb"
+            tar -xzf "$REMOTE_DIR/chromadb-deploy.tgz" -C "$REMOTE_DIR"
+            rm -f "$REMOTE_DIR/chromadb-deploy.tgz"
             URL=$(printf '%s' "$PRESIGN_B64" | base64 -d)
             curl -fSL "$URL" -o /tmp/aniwhere-crawler-image.tar
             sudo docker load -i /tmp/aniwhere-crawler-image.tar
