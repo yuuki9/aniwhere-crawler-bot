@@ -27,6 +27,9 @@ secrets/*
 data/
 !data/samples/
 
+# 파이프라인·로컬 산출물 (RAG는 Chroma만 사용, 배포 시 미전송)
+output/
+
 # IDE
 .idea/
 .vscode/
