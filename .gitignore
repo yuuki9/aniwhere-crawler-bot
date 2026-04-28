@@ -19,9 +19,8 @@ env/
 .env.*
 !.env.example
 
-# SSH keys (Docker는 ./secrets 마운트)
-secrets/*
-!secrets/.gitkeep
+# SSH keys (Docker는 ./secrets 마운트). 폴더는 로컬에서 생성, 저장소에 미포함.
+secrets/
 
 # Data (샘플 제외)
 data/
