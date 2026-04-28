@@ -37,7 +37,6 @@ on:
       - "process_shops.py"
       - "run_pipeline.py"
       - "retry_failed.py"
-      - "output/knowledge_base/**"
       - "chromadb/**"
   workflow_dispatch:
 
