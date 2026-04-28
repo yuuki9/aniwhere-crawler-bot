@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit 설정 — 위치는 반드시 Git 저장소 루트입니다.
+# client/, server/ 등 하위 폴더가 아닙니다. 공식 문서도 동일하게 안내합니다.
+#
+# 자동 리뷰 대상 브랜치: reviews.auto_review.base_branches를 비우면
+# 플랫폼에서 지정한 기본 브랜치(main 등)로 열린 PR만 자동 리뷰합니다.
+# develop·release/* 등 다른 베이스는 자동 리뷰에서 제외됩니다(추가 패턴을 넣지 않은 한).
+# 이 저장소의 기본 브랜치가 main인지 GitHub 저장소 설정에서 확인하세요.
+
+language: ko-KR
+
+reviews:
+  auto_review:
+    enabled: true
+    base_branches: []
