@@ -181,6 +181,13 @@ jobs:
             if [ -n "${CRAWLER_ENV_B64:-}" ]; then
               printf '%s' "$CRAWLER_ENV_B64" | base64 -d > "$REMOTE_DIR/.env"
             else
+              required_vars=(EC2_PRIVATE_IP DB_PORT DB_NAME DB_USERNAME DB_PASSWORD)
+              for var in "${required_vars[@]}"; do
+                if [ -z "${!var:-}" ]; then
+                  echo "::error::$var secret is required when CRAWLER_ENV_B64 is not set"
+                  exit 1
+                fi
+              done
               printf '%s\n' \
                 'APP_ENV=production' \
                 'APP_DEBUG=false' \
