@@ -1,7 +1,7 @@
 # Git 컨벤션
 
 브랜치 · 커밋 · 태그 규칙을 통일해 리뷰와 배포(EC2 포함)를 단순하게 만듭니다.  
-커밋 제목은 `type(scope): 설명` 형식을 씁니다. **이 저장소는 단일 Python 프로젝트**이며, `client/`·`server/` 같은 모노레포 폴더 구분은 없습니다.
+커밋 제목은 `type(scope): 설명` 형식을 씁니다.
 
 ## 이 저장소 구조 요약
 
@@ -95,4 +95,13 @@ type(scope): 짧은 설명 (한 줄)
 
 ## 참고
 
-- PR은 `.github/PULL_REQUEST_TEMPLATE.md`를 채워 올립니다.
+- PR은 `.github/PULL_REQUEST_TEMPLATE.md`를 채워 올립니다. **레포 안에 `pr-body-*.md` 같은 별도 본문 파일을 새로 두지 않는 것**을 권장합니다(기준 양식은 위 템플릿 하나).
+
+### PR 본문이 “마크다운이 안 먹는 것처럼” 보일 때
+
+- GitHub PR 설명은 기본이 **GitHub Flavored Markdown** 입니다. 화면에 `\r\n` 같은 글자가 그대로 보이면, 본문에 **실제 줄바꿈이 아니라 역슬래시+문자**가 들어간 것입니다(대개 CLI에서 잘못 넘긴 경우).
+- 인라인 코드는 **백틱** `` `BASTION_SSH` `` 를 씁니다. `\이름\` 형태는 마크다운이 아닙니다.
+
+### PR 본문을 넣는 방법 (권장 순)
+
+1. **GitHub 웹**에서 PR 생성·수정: **Create pull request** 시 `.github/PULL_REQUEST_TEMPLATE.md`가 **자동으로** 설명란에 들어가고, 헤더·목록·체크박스가 그대로 렌더됩니다.
