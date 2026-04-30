@@ -1,27 +1,34 @@
-# Crawler/AI API deploy: build image -> S3 -> private EC2 via Bastion (ProxyJump), docker load.
+# Crawler/AI API deploy: build image -> S3 -> bastion (public subnet) via direct SSH/SCP, docker load.
 # Compose: docker-compose.ec2.image.yml (image aniwhere-crawler-bot:latest after docker load).
 #
-# GitHub Actions secrets (names must match):
+# GitHub Actions secrets (`.env` / `.env.example` 와 동일한 bastion 정보면 됨)
+#
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET
-#   BASTION_HOST, BASTION_USER
-#   EC2_PRIVATE_IP, EC2_USER, EC2_SSH_KEY   # 동일 PEM으로 베스천 + 사설 EC2
+#   EC2_SSH_KEY    # 로컬 secrets/*.pem 과 동일한 **개인키 전체 본문** (경로가 아님)
+#   [권장] BASTION_SSH_FINGERPRINT — bastion SSH 호스트 공개키 SHA256 지문(MITM 완화). 미설정 시 appleboy 쪽에서 검증 생략.
 #
-# .env (택 1)
-#   CRAWLER_ENV_B64: production .env (base64). 동일 VPC/프라이빗 DB 직접 연결이면 MYSQL_USE_SSH_TUNNEL=false,
-#   MYSQL_SSH_* 는 비워 둬도 됨. (SSH 터널/PEM 은 로컬 테스트용)
-#   또는 CRAWLER_ENV_B64 생략 시 aniwhere server 와 동일 DB 시크릿으로 최소 .env (MySQL 직접, 터널 끔):
-#   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
+# SSH 접속 대상 — 아래 **택 1**:
+#   (A) BASTION_SSH = MYSQL_SSH_BASTION 과 같게  →  예: ec2-user@203.0.113.10
+#       [선택] BASTION_SSH_PORT = MYSQL_SSH_BASTION_PORT (비우면 22)
+#   (B) BASTION_HOST + BASTION_USER 를 각각 설정 (A 와 동시에 쓰면 A 우선)
 #
-# Chroma 임베딩 산출물(EC2 로 복사됨) — 택 1:
+#   BASTION_SSH 가 host 만 있을 때( @ 없음 )는 BASTION_USER 시크릿 필수.
+#
+# .env (택 1) — 배포 런타임: 앱 컨테이너 ↔ DB는 **같은 VPC 사설 IP 직접**(SSH 터널 미사용).
+#   CRAWLER_ENV_B64: production .env (base64). MYSQL_HOST=DB 사설 주소, MYSQL_USE_SSH_TUNNEL=false 권장.
+#   또는 생략 시 DB_* 로 최소 .env 생성(WF가 MYSQL_USE_SSH_TUNNEL=false 및 MYSQL_SSH_* 비움):
+#   EC2_PRIVATE_IP (MYSQL_HOST), DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
+#
+# Chroma 임베딩 산출물(호스트로 복사됨) — 택 1:
 #   - 저장소에 ./chromadb 가 포함된 채로 push (로컬 임베딩 후 커밋), 또는
 #   - 비밀 CHROMADB_S3_OBJECT_KEY: AWS_S3_BUCKET 내 객체 키 (예: aniwhere-crawler-bot/chromadb/latest.tar.gz).
 #     로컬: tar -czvf chromadb.tgz chromadb && aws s3 cp chromadb.tgz s3://$BUCKET/$KEY
 #
-# Private EC2 는 S3 presigned URL 받으려면 아웃바운드 HTTPS (NAT/VPC endpoint).
+# 퍼블릭 bastion 은 S3 presigned URL(curl) 수신을 위해 아웃바운드 HTTPS(443)만 열려 있으면 됨 (일반적으로 IGW 경로).
 #
 # Triggers: push main when app/** 등 변경; workflow_dispatch
 
-name: Deploy to EC2
+name: Deploy to bastion
 
 on:
   push:
@@ -75,7 +82,7 @@ jobs:
           B64=$(printf '%s' "$PRESIGN" | base64 -w0)
           echo "presign_b64=$B64" >> "${GITHUB_OUTPUT}"
 
-      - name: Prepare ChromaDB tarball for EC2
+      - name: Prepare ChromaDB tarball for deploy host
         env:
           BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -94,43 +101,81 @@ jobs:
           fi
           ls -la /tmp/chromadb-deploy.tgz
 
-      - name: Copy compose and ChromaDB tarball to EC2
+      - name: Resolve bastion SSH (align with MYSQL_SSH_* in .env)
+        id: bastion
+        env:
+          BASTION_SSH: ${{ secrets.BASTION_SSH }}
+          BASTION_HOST: ${{ secrets.BASTION_HOST }}
+          BASTION_USER: ${{ secrets.BASTION_USER }}
+          BASTION_SSH_PORT: ${{ secrets.BASTION_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${BASTION_SSH_PORT:-22}"
+          if [ -n "${BASTION_SSH:-}" ]; then
+            case "$BASTION_SSH" in
+              *@*)
+                user="${BASTION_SSH%%@*}"
+                host="${BASTION_SSH#*@}"
+                if [ -z "$user" ] || [ -z "$host" ]; then
+                  echo "::error::BASTION_SSH must be user@host with non-empty user and host (or host-only with BASTION_USER secret)"
+                  exit 1
+                fi
+                echo "user=${user}" >> "$GITHUB_OUTPUT"
+                echo "host=${host}" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                if [ -z "${BASTION_USER:-}" ]; then
+                  echo "::error::BASTION_SSH is host-only; set BASTION_USER secret too"
+                  exit 1
+                fi
+                echo "user=${BASTION_USER}" >> "$GITHUB_OUTPUT"
+                echo "host=${BASTION_SSH}" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          else
+            if [ -z "${BASTION_HOST:-}" ] || [ -z "${BASTION_USER:-}" ]; then
+              echo "::error::Set BASTION_SSH (same as MYSQL_SSH_BASTION) or both BASTION_HOST and BASTION_USER"
+              exit 1
+            fi
+            echo "user=${BASTION_USER}" >> "$GITHUB_OUTPUT"
+            echo "host=${BASTION_HOST}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "port=${PORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Copy compose and ChromaDB tarball to bastion
         uses: appleboy/scp-action@v1
         with:
-          host: ${{ secrets.EC2_PRIVATE_IP }}
-          username: ${{ secrets.EC2_USER }}
+          host: ${{ steps.bastion.outputs.host }}
+          username: ${{ steps.bastion.outputs.user }}
+          port: ${{ steps.bastion.outputs.port }}
+          fingerprint: ${{ secrets.BASTION_SSH_FINGERPRINT }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          proxy_host: ${{ secrets.BASTION_HOST }}
-          proxy_username: ${{ secrets.BASTION_USER }}
-          proxy_key: ${{ secrets.EC2_SSH_KEY }}
           source: "docker-compose.ec2.image.yml,/tmp/chromadb-deploy.tgz"
-          target: "/home/${{ secrets.EC2_USER }}/aniwhere-crawler-bot/"
+          target: "/home/${{ steps.bastion.outputs.user }}/aniwhere-crawler-bot/"
           timeout: 120s
           command_timeout: 30m
 
-      - name: Deploy on private EC2
+      - name: Deploy on bastion
         uses: appleboy/ssh-action@v1.2.0
         env:
           PRESIGN_B64: ${{ steps.artifact.outputs.presign_b64 }}
           CRAWLER_ENV_B64: ${{ secrets.CRAWLER_ENV_B64 }}
-          DB_HOST: ${{ secrets.DB_HOST }}
+          EC2_PRIVATE_IP: ${{ secrets.EC2_PRIVATE_IP }}
           DB_PORT: ${{ secrets.DB_PORT }}
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
-          host: ${{ secrets.EC2_PRIVATE_IP }}
-          username: ${{ secrets.EC2_USER }}
+          host: ${{ steps.bastion.outputs.host }}
+          username: ${{ steps.bastion.outputs.user }}
+          port: ${{ steps.bastion.outputs.port }}
+          fingerprint: ${{ secrets.BASTION_SSH_FINGERPRINT }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          proxy_host: ${{ secrets.BASTION_HOST }}
-          proxy_username: ${{ secrets.BASTION_USER }}
-          proxy_key: ${{ secrets.EC2_SSH_KEY }}
-          envs: PRESIGN_B64,CRAWLER_ENV_B64,DB_HOST,DB_PORT,DB_NAME,DB_USERNAME,DB_PASSWORD
           script_stop: true
           command_timeout: 30m
           script: |
             set -euo pipefail
-            REMOTE_DIR="/home/${{ secrets.EC2_USER }}/aniwhere-crawler-bot"
+            REMOTE_DIR="/home/${{ steps.bastion.outputs.user }}/aniwhere-crawler-bot"
             mkdir -p "$REMOTE_DIR"/data "$REMOTE_DIR"/output
             cd "$REMOTE_DIR"
             rm -rf "$REMOTE_DIR/chromadb"
@@ -144,8 +189,26 @@ jobs:
             if [ -n "${CRAWLER_ENV_B64:-}" ]; then
               printf '%s' "$CRAWLER_ENV_B64" | base64 -d > "$REMOTE_DIR/.env"
             else
-              printf 'APP_ENV=production\nAPP_DEBUG=false\nMYSQL_USE_SSH_TUNNEL=false\nMYSQL_HOST=%s\nMYSQL_PORT=%s\nMYSQL_DATABASE=%s\nMYSQL_USER=%s\nMYSQL_PASSWORD=%s\n' \
-                "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USERNAME" "$DB_PASSWORD" > "$REMOTE_DIR/.env"
+              required_vars=(EC2_PRIVATE_IP DB_PORT DB_NAME DB_USERNAME DB_PASSWORD)
+              for var in "${required_vars[@]}"; do
+                if [ -z "${!var:-}" ]; then
+                  echo "::error::$var secret is required when CRAWLER_ENV_B64 is not set"
+                  exit 1
+                fi
+              done
+              printf '%s\n' \
+                'APP_ENV=production' \
+                'APP_DEBUG=false' \
+                'MYSQL_USE_SSH_TUNNEL=false' \
+                "MYSQL_HOST=${EC2_PRIVATE_IP}" \
+                "MYSQL_PORT=${DB_PORT}" \
+                "MYSQL_DATABASE=${DB_NAME}" \
+                "MYSQL_USER=${DB_USERNAME}" \
+                "MYSQL_PASSWORD=${DB_PASSWORD}" \
+                'MYSQL_SSH_BASTION=' \
+                'MYSQL_SSH_USERNAME=' \
+                'MYSQL_SSH_PRIVATE_KEY=' \
+                > "$REMOTE_DIR/.env"
             fi
             chmod 600 "$REMOTE_DIR/.env" || true
             compose() {
