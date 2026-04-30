@@ -5,6 +5,7 @@
 #
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET
 #   EC2_SSH_KEY    # 로컬 secrets/*.pem 과 동일한 **개인키 전체 본문** (경로가 아님)
+#   [권장] BASTION_SSH_FINGERPRINT — bastion SSH 호스트 공개키 SHA256 지문(MITM 완화). 미설정 시 appleboy 쪽에서 검증 생략.
 #
 # SSH 접속 대상 — 아래 **택 1**:
 #   (A) BASTION_SSH = MYSQL_SSH_BASTION 과 같게  →  예: ec2-user@203.0.113.10
@@ -113,8 +114,14 @@ jobs:
           if [ -n "${BASTION_SSH:-}" ]; then
             case "$BASTION_SSH" in
               *@*)
-                echo "user=${BASTION_SSH%%@*}" >> "$GITHUB_OUTPUT"
-                echo "host=${BASTION_SSH#*@}" >> "$GITHUB_OUTPUT"
+                user="${BASTION_SSH%%@*}"
+                host="${BASTION_SSH#*@}"
+                if [ -z "$user" ] || [ -z "$host" ]; then
+                  echo "::error::BASTION_SSH must be user@host with non-empty user and host (or host-only with BASTION_USER secret)"
+                  exit 1
+                fi
+                echo "user=${user}" >> "$GITHUB_OUTPUT"
+                echo "host=${host}" >> "$GITHUB_OUTPUT"
                 ;;
               *)
                 if [ -z "${BASTION_USER:-}" ]; then
@@ -141,6 +148,7 @@ jobs:
           host: ${{ steps.bastion.outputs.host }}
           username: ${{ steps.bastion.outputs.user }}
           port: ${{ steps.bastion.outputs.port }}
+          fingerprint: ${{ secrets.BASTION_SSH_FINGERPRINT }}
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "docker-compose.ec2.image.yml,/tmp/chromadb-deploy.tgz"
           target: "/home/${{ steps.bastion.outputs.user }}/aniwhere-crawler-bot/"
@@ -161,8 +169,8 @@ jobs:
           host: ${{ steps.bastion.outputs.host }}
           username: ${{ steps.bastion.outputs.user }}
           port: ${{ steps.bastion.outputs.port }}
+          fingerprint: ${{ secrets.BASTION_SSH_FINGERPRINT }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: PRESIGN_B64,CRAWLER_ENV_B64,EC2_PRIVATE_IP,DB_PORT,DB_NAME,DB_USERNAME,DB_PASSWORD
           script_stop: true
           command_timeout: 30m
           script: |
