@@ -101,6 +101,13 @@ jobs:
           fi
           ls -la /tmp/chromadb-deploy.tgz
 
+      # SCP 소스가 /tmp 처럼 절대 경로면 원격에서 <target>/tmp/... 로 올라가 tar 경로와 어긋날 수 있음 → 레포 루트로 복사 후 상대경로만 전송
+      - name: Stage Chroma tarball beside compose (flat SCP destination)
+        run: |
+          set -euo pipefail
+          cp /tmp/chromadb-deploy.tgz chromadb-deploy.tgz
+          ls -la chromadb-deploy.tgz
+
       - name: Resolve bastion SSH (align with MYSQL_SSH_* in .env)
         id: bastion
         env:
@@ -150,7 +157,7 @@ jobs:
           port: ${{ steps.bastion.outputs.port }}
           fingerprint: ${{ secrets.BASTION_SSH_FINGERPRINT }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "docker-compose.ec2.image.yml,/tmp/chromadb-deploy.tgz"
+          source: "docker-compose.ec2.image.yml,chromadb-deploy.tgz"
           target: "/home/${{ steps.bastion.outputs.user }}/aniwhere-crawler-bot/"
           timeout: 120s
           command_timeout: 30m
