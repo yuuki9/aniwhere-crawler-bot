@@ -32,11 +32,11 @@ async def _after_for_new_column(cur: aiomysql.Cursor, candidates: tuple[str, ...
 async def main() -> int:
     s = get_settings()
     conn = await aiomysql.connect(
-        host=s.mysql_host,
-        port=s.mysql_port,
-        user=s.mysql_user,
-        password=s.mysql_password,
-        db=s.mysql_database,
+        host=s.db_host,
+        port=s.db_port,
+        user=s.db_username,
+        password=s.db_password,
+        db=s.db_name,
         autocommit=True,
     )
     try:

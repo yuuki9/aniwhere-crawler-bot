@@ -34,7 +34,7 @@
 
 ## 머지 후
 
-<!-- main 머지 시 deploy-ec2.yml path 필터에 걸리면 EC2 배포가 돌 수 있음. 시크릿(EC_HOST, EC2_PRIVATE_IP 등)·DB 순서·공지 필요 여부를 여기에 -->
+<!-- main 머지 시 deploy-ec2.yml path 필터에 걸리면 EC2 배포가 돌 수 있음. 시크릿(EC_HOST, DB_HOST 등)·공지 필요 여부를 여기에 -->
 
 - [ ] `main` 머지 시 변경 파일에 따라 **Deploy to EC2** 등이 돌아갈 수 있음 → 공지·시크릿·DB 순서 필요하면 기재
 - [ ] 기타 후속 작업 없음

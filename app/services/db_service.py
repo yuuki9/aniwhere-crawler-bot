@@ -15,11 +15,11 @@ async def get_db_pool():
     """MySQL 커넥션 풀 생성"""
     settings = get_settings()
     return await aiomysql.create_pool(
-        host=settings.mysql_host,
-        port=settings.mysql_port,
-        user=settings.mysql_user,
-        password=settings.mysql_password,
-        db=settings.mysql_database,
+        host=settings.db_host,
+        port=settings.db_port,
+        user=settings.db_username,
+        password=settings.db_password,
+        db=settings.db_name,
         autocommit=True,
     )
 

@@ -1,5 +1,5 @@
 # EC2: GitHub Actions 가 빌드한 이미지를 docker load 한 뒤 이 파일로 기동 (Docker Hub 없이)
-# 배포(EC2 등) 호스트와 DB 가 같은 VPC이면 .env 에 MYSQL_HOST=DB 접근 가능 주소(사설 IP 등)만 두면 됩니다.
+# 배포(EC2 등) 호스트와 DB 가 같은 VPC이면 .env 에 DB_HOST 등 접근 가능 주소만 맞추면 됩니다.
 # ./data, ./output, ./chromadb 는 호스트 디렉터리 마운트(CI/CD 가 chromadb tarball 풀어 둠).
 services:
   aniwhere-crawler:
