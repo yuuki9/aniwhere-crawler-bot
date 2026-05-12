@@ -8,17 +8,15 @@ import sys
 import aiomysql
 
 from app.core.config import get_settings
-from app.services.db_service import get_effective_mysql_host_port, stop_mysql_ssh_tunnel
 
 
 async def main() -> int:
     settings = get_settings()
-    host, port = get_effective_mysql_host_port()
     conn = None
     try:
         conn = await aiomysql.connect(
-            host=host,
-            port=port,
+            host=settings.mysql_host,
+            port=settings.mysql_port,
             user=settings.mysql_user,
             password=settings.mysql_password,
             db=settings.mysql_database,
@@ -34,7 +32,6 @@ async def main() -> int:
     finally:
         if conn is not None:
             conn.close()
-        stop_mysql_ssh_tunnel()
 
 
 if __name__ == "__main__":

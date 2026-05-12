@@ -8,7 +8,6 @@ import sys
 import aiomysql
 
 from app.core.config import get_settings
-from app.services.db_service import get_effective_mysql_host_port, stop_mysql_ssh_tunnel
 
 COL = "sells_ichiban_kuji"
 COMMENT = "제일복권(이치방쿠지) 취급: 1=취급, 0=미취급, NULL=미확인"
@@ -36,10 +35,9 @@ async def _after_clause(cur: aiomysql.Cursor) -> str:
 
 async def main() -> int:
     s = get_settings()
-    host, port = get_effective_mysql_host_port()
     conn = await aiomysql.connect(
-        host=host,
-        port=port,
+        host=s.mysql_host,
+        port=s.mysql_port,
         user=s.mysql_user,
         password=s.mysql_password,
         db=s.mysql_database,
@@ -59,7 +57,6 @@ async def main() -> int:
             return 0
     finally:
         conn.close()
-        stop_mysql_ssh_tunnel()
 
 
 if __name__ == "__main__":

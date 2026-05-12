@@ -43,14 +43,6 @@ class Settings(BaseSettings):
     mysql_password: str = "aniwhere2026!"
     mysql_database: str = "aniwhere"
 
-    # MySQL → 베스천 SSH 터널 (True면 mysql_host/mysql_port 는 베스천 기준 사설 DB 주소)
-    mysql_use_ssh_tunnel: bool = False
-    mysql_ssh_bastion: str = ""
-    mysql_ssh_bastion_port: int = 22
-    mysql_ssh_username: str = ""
-    mysql_ssh_private_key: str = ""
-    mysql_ssh_private_key_password: str = ""
-
     # S3
     s3_bucket_name: str = "aniwhere-knowledge-base"
 
@@ -66,6 +58,9 @@ class Settings(BaseSettings):
     # 로컬 파이프라인 (run_pipeline.py)
     pipeline_sleep_sec: float = 15.0
     pipeline_max_blog_links_crawl: int = 5
+
+    # TMDB v3 (AniList 응답에 한글 제목 보강) — 내부 데이터 구축용 기본 키; 배포 시 환경변수로 덮어쓰기 권장
+    tmdb_api_key: str = "f1e4b3eb2c4842e70544eed062b139af"
 
 
 @lru_cache

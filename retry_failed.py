@@ -3,7 +3,7 @@
 import asyncio
 import csv
 from pathlib import Path
-from app.services.db_service import get_db_pool, stop_mysql_ssh_tunnel
+from app.services.db_service import get_db_pool
 from app.services.blog_crawl_service import crawl_blog_context
 from app.services.refine_service import refine_shop
 from app.schemas.shop import ShopRecord
@@ -134,7 +134,6 @@ async def main():
 
     pool.close()
     await pool.wait_closed()
-    stop_mysql_ssh_tunnel()
 
     if still_failed:
         print(f"\n⚠️  최종 실패: {still_failed}")

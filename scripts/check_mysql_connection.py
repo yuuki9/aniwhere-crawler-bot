@@ -1,11 +1,11 @@
-"""MySQL(+SSH 터널) 연결 검증. Docker: docker compose run --rm api python scripts/check_mysql_connection.py"""
+"""MySQL 연결 검증. Docker: docker compose run --rm api python scripts/check_mysql_connection.py"""
 
 from __future__ import annotations
 
 import asyncio
 import sys
 
-from app.services.db_service import get_db_pool, stop_mysql_ssh_tunnel
+from app.services.db_service import get_db_pool
 
 
 async def main() -> int:
@@ -37,7 +37,6 @@ async def main() -> int:
         if pool is not None:
             pool.close()
             await pool.wait_closed()
-        stop_mysql_ssh_tunnel()
 
 
 if __name__ == "__main__":

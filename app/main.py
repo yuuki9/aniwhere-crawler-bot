@@ -7,9 +7,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from app.api import health, search, shops
+from app.api import anilist, health, search, shops
 from app.core.config import get_settings
-from app.services.db_service import stop_mysql_ssh_tunnel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +25,6 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("서버 시작 | env=%s", settings.app_env)
     yield
-    stop_mysql_ssh_tunnel()
     logger.info("서버 종료")
 
 
@@ -55,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(search.router)
     app.include_router(shops.router)
+    app.include_router(anilist.router)
 
     return app
 
