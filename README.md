@@ -67,7 +67,7 @@ python run_pipeline.py
 
 - `GEMINI_API_KEY` — 정제 및 RAG 답변
 - `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` — `--no-collect`를 쓰지 않는 경우(블로그 URL 자동 수집)
-- `MYSQL_*` — MySQL 저장을 켤 때 (`--no-mysql`이 아닐 때)
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` — MySQL 저장을 켤 때 (`--no-mysql`이 아닐 때)
 
 **검색·벡터 저장:**
 

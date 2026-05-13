@@ -31,7 +31,6 @@ from app.services.db_service import (
     get_shop_id_by_name,
     save_shop_to_db,
     shop_exists_by_name,
-    stop_mysql_ssh_tunnel,
     update_shop_in_db,
     upsert_shop_details,
 )
@@ -382,7 +381,6 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
             logger.info("[pipeline] 단계=mysql_pool | 종료")
             pool.close()
             await pool.wait_closed()
-        stop_mysql_ssh_tunnel()
 
     fail = sum(1 for r in results if r.is_hard_fail)
     soft_ok = len(results) - fail

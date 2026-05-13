@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import threading
-from pathlib import Path
 
 import aiomysql
 
@@ -12,119 +10,16 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_tunnel_lock = threading.Lock()
-_tunnel = None
-
-
-def _parse_bastion(bastion: str, ssh_username: str) -> tuple[str, str]:
-    bastion = bastion.strip()
-    if not bastion:
-        raise ValueError("MYSQL_SSH_BASTION 이 비어 있습니다")
-    if "@" in bastion:
-        user, _, host = bastion.partition("@")
-        user = user.strip()
-        host = host.strip()
-        if ssh_username.strip():
-            user = ssh_username.strip()
-        if not user or not host:
-            raise ValueError("MYSQL_SSH_BASTION 형식은 user@host 또는 host (+ MYSQL_SSH_USERNAME) 입니다")
-        return user, host
-    user = ssh_username.strip() or "ec2-user"
-    return user, bastion
-
-
-def ensure_mysql_ssh_tunnel() -> None:
-    """베스천 SSH 터널을 띄운다. 이미 떠 있으면 무시."""
-    global _tunnel
-
-    settings = get_settings()
-    if not settings.mysql_use_ssh_tunnel:
-        return
-
-    with _tunnel_lock:
-        if _tunnel is not None:
-            try:
-                if _tunnel.is_active:
-                    return
-            except Exception:
-                pass
-            try:
-                _tunnel.stop()
-            except Exception:
-                pass
-            _tunnel = None
-
-        if not settings.mysql_ssh_bastion.strip():
-            raise ValueError("MYSQL_USE_SSH_TUNNEL=true 일 때 MYSQL_SSH_BASTION 이 필요합니다")
-        key_path = settings.mysql_ssh_private_key.strip()
-        if not key_path:
-            raise ValueError("MYSQL_USE_SSH_TUNNEL=true 일 때 MYSQL_SSH_PRIVATE_KEY (PEM 경로) 가 필요합니다")
-
-        key_path = str(Path(key_path).expanduser().resolve())
-        if not Path(key_path).is_file():
-            raise ValueError(f"MYSQL_SSH_PRIVATE_KEY 파일 없음: {key_path}")
-        user, host = _parse_bastion(settings.mysql_ssh_bastion, settings.mysql_ssh_username)
-
-        from sshtunnel import SSHTunnelForwarder
-
-        key_pass = settings.mysql_ssh_private_key_password
-        key_pass = key_pass if key_pass else None
-
-        _tunnel = SSHTunnelForwarder(
-            ssh_address_or_host=(host, settings.mysql_ssh_bastion_port),
-            ssh_username=user,
-            ssh_pkey=key_path,
-            ssh_private_key_password=key_pass,
-            remote_bind_address=(settings.mysql_host, settings.mysql_port),
-            local_bind_address=("127.0.0.1", 0),
-        )
-        _tunnel.start()
-        logger.info(
-            "[mysql] SSH 터널 시작 | local=127.0.0.1:%s → %s:%s (via %s@%s:%s)",
-            _tunnel.local_bind_port,
-            settings.mysql_host,
-            settings.mysql_port,
-            user,
-            host,
-            settings.mysql_ssh_bastion_port,
-        )
-
-
-def stop_mysql_ssh_tunnel() -> None:
-    """SSH 터널을 닫는다. 앱/파이프라인 종료 시 호출."""
-    global _tunnel
-    with _tunnel_lock:
-        if _tunnel is not None:
-            try:
-                _tunnel.stop()
-            except Exception as e:
-                logger.warning("[mysql] SSH 터널 종료 중 경고: %s", e)
-            finally:
-                _tunnel = None
-                logger.info("[mysql] SSH 터널 종료")
-
-
-def get_effective_mysql_host_port() -> tuple[str, int]:
-    """aiomysql 연결용 (host, port). 터널 사용 시 로컬 바인드 포트."""
-    settings = get_settings()
-    if settings.mysql_use_ssh_tunnel:
-        ensure_mysql_ssh_tunnel()
-        if _tunnel is None:
-            raise RuntimeError("SSH 터널을 시작하지 못했습니다")
-        return "127.0.0.1", _tunnel.local_bind_port
-    return settings.mysql_host, settings.mysql_port
-
 
 async def get_db_pool():
     """MySQL 커넥션 풀 생성"""
     settings = get_settings()
-    host, port = get_effective_mysql_host_port()
     return await aiomysql.create_pool(
-        host=host,
-        port=port,
-        user=settings.mysql_user,
-        password=settings.mysql_password,
-        db=settings.mysql_database,
+        host=settings.db_host,
+        port=settings.db_port,
+        user=settings.db_username,
+        password=settings.db_password,
+        db=settings.db_name,
         autocommit=True,
     )
 

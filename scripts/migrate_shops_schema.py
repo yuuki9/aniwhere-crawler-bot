@@ -8,7 +8,6 @@ import sys
 import aiomysql
 
 from app.core.config import get_settings
-from app.services.db_service import get_effective_mysql_host_port, stop_mysql_ssh_tunnel
 
 
 async def _col_exists(cur: aiomysql.Cursor, table: str, column: str) -> bool:
@@ -32,13 +31,12 @@ async def _after_for_new_column(cur: aiomysql.Cursor, candidates: tuple[str, ...
 
 async def main() -> int:
     s = get_settings()
-    host, port = get_effective_mysql_host_port()
     conn = await aiomysql.connect(
-        host=host,
-        port=port,
-        user=s.mysql_user,
-        password=s.mysql_password,
-        db=s.mysql_database,
+        host=s.db_host,
+        port=s.db_port,
+        user=s.db_username,
+        password=s.db_password,
+        db=s.db_name,
         autocommit=True,
     )
     try:
@@ -81,7 +79,6 @@ async def main() -> int:
         return 0
     finally:
         conn.close()
-        stop_mysql_ssh_tunnel()
 
 
 if __name__ == "__main__":

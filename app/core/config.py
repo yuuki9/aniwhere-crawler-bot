@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # App
@@ -36,20 +38,12 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_default_region: str = "ap-northeast-2"
 
-    # MySQL
-    mysql_host: str = "3.39.150.248"
-    mysql_port: int = 25431
-    mysql_user: str = "root"
-    mysql_password: str = "aniwhere2026!"
-    mysql_database: str = "aniwhere"
-
-    # MySQL → 베스천 SSH 터널 (True면 mysql_host/mysql_port 는 베스천 기준 사설 DB 주소)
-    mysql_use_ssh_tunnel: bool = False
-    mysql_ssh_bastion: str = ""
-    mysql_ssh_bastion_port: int = 22
-    mysql_ssh_username: str = ""
-    mysql_ssh_private_key: str = ""
-    mysql_ssh_private_key_password: str = ""
+    # DB — 환경변수 DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
+    db_host: str = "127.0.0.1"
+    db_port: int = 3306
+    db_username: str = "root"
+    db_password: str = ""
+    db_name: str = "aniwhere"
 
     # S3
     s3_bucket_name: str = "aniwhere-knowledge-base"
@@ -59,13 +53,14 @@ class Settings(BaseSettings):
 
     # ChromaDB (RAG / 파이프라인 공통)
     chroma_persist_path: str = "chromadb"
-    # RAG: Chroma 최상위 결과 거리가 이 값보다 크면(덜 유사하면) 컨텍스트 없이 Gemini만 사용.
-    # None이면(기본) 빈 문서가 아닌 한 Chroma 결과를 항상 컨텍스트로 사용.
     rag_chroma_max_distance: float | None = None
 
     # 로컬 파이프라인 (run_pipeline.py)
     pipeline_sleep_sec: float = 15.0
     pipeline_max_blog_links_crawl: int = 5
+
+    # TMDB v3 (AniList 응답에 한글 제목 보강)
+    tmdb_api_key: str = "f1e4b3eb2c4842e70544eed062b139af"
 
 
 @lru_cache
