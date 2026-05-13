@@ -1,12 +1,14 @@
-# Crawler/AI API deploy: build image -> upload S3 presign -> SSH/SCP to EC2 host (EC_HOST), docker load.
+# Crawler/AI API deploy: build image -> upload S3 presign -> SSH/SCP to EC2 host, docker load.
 # Compose: docker-compose.ec2.image.yml (image aniwhere-crawler-bot:latest after docker load).
 #
-# GitHub Actions secrets:
+# GitHub Actions — SSH 대상 (아래 둘 중 하나)
+#
+#   (권장) EC2_HOST — 퍼블릭 IP 또는 DNS만. Repository **Variables** 또는 **Secrets**.
+#           + EC2_USER — SSH 사용자(예 ec2-user). Variables 또는 Secrets(둘 중 하나면 됨).
+#   (호환) EC_HOST — 단일 Secret: `user@host` 이거나 호스트만(IP/DNS). 호스트만일 때는 EC2_USER 필수.
 #
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET
 #   EC2_SSH_KEY    # 배포 호스트 접속용 **개인키 전체 본문** (파일 경로 아님)
-#   EC_HOST       # SSH 접속값: `ec2-user@203.0.113.10` 또는 퍼블릭 IP/DNS 단독(EC_DEPLOY_USER 필수)
-#   [선택] EC_DEPLOY_USER   # EC_HOST 에 @ 없을 때 SSH 사용자명(예: ec2-user). user@host 형이면 불필요
 #   [선택] EC_HOST_PORT      # SSH 포트(비우면 22).
 #   [권장] EC_HOST_SSH_FINGERPRINT — SSH 호스트 공개키 SHA256 지문(MITM 완화). 미설정 시 검증 생략
 #
@@ -16,7 +18,7 @@
 # 또는 CRAWLER_ENV_B64 생략 시 GitHub Secrets 로 최소 .env 생성(DB_*):
 #   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
 #
-# 배포 호스트(EC_HOST)가 S3 presigned URL 에서 이미지를 받으려면 아웃바운드 HTTPS(443) 허용.
+# 배포 대상 인스턴스가 S3 presigned URL 에서 이미지를 받으려면 아웃바운드 HTTPS(443) 허용.
 #
 # Chroma tarball: 레포 의 chromadb/ 커밋 또는 CHROMADB_S3_OBJECT_KEY
 #
@@ -101,17 +103,40 @@ jobs:
           cp /tmp/chromadb-deploy.tgz chromadb-deploy.tgz
           ls -la chromadb-deploy.tgz
 
-      - name: Resolve deploy SSH from EC_HOST
+      - name: Resolve deploy SSH target
         id: ec_host
         env:
+          EC2_HOST_VARS: ${{ vars.EC2_HOST }}
+          EC2_HOST_SECRETS: ${{ secrets.EC2_HOST }}
+          EC2_USER_VARS: ${{ vars.EC2_USER }}
+          EC2_USER_SECRETS: ${{ secrets.EC2_USER }}
           EC_HOST: ${{ secrets.EC_HOST }}
-          EC_DEPLOY_USER: ${{ secrets.EC_DEPLOY_USER }}
           EC_HOST_PORT: ${{ secrets.EC_HOST_PORT }}
         run: |
           set -euo pipefail
           PORT="${EC_HOST_PORT:-22}"
+          DEPLOY_HOST="${EC2_HOST_VARS:-}"
+          if [ -z "$DEPLOY_HOST" ]; then
+            DEPLOY_HOST="${EC2_HOST_SECRETS:-}"
+          fi
+          DEPLOY_USER_MERGED="${EC2_USER_VARS:-}"
+          if [ -z "$DEPLOY_USER_MERGED" ]; then
+            DEPLOY_USER_MERGED="${EC2_USER_SECRETS:-}"
+          fi
+
+          if [ -n "$DEPLOY_HOST" ]; then
+            if [ -z "$DEPLOY_USER_MERGED" ]; then
+              echo "::error::EC2_HOST 가 설정되어 있으면 EC2_USER 가 필요합니다 (Repository Variables 또는 Secrets 에 예: ec2-user)."
+              exit 1
+            fi
+            echo "user=${DEPLOY_USER_MERGED}" >> "$GITHUB_OUTPUT"
+            echo "host=${DEPLOY_HOST}" >> "$GITHUB_OUTPUT"
+            echo "port=${PORT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ -z "${EC_HOST:-}" ]; then
-            echo "::error::Set GitHub secret EC_HOST — user@host (예: ec2-user@1.2.3.4) 또는 퍼블릭 호스트/IP + EC_DEPLOY_USER"
+            echo "::error::배포 SSH 대상 미설정 — 권장: Variables 또는 Secrets 에 EC2_HOST(IP/DNS) + EC2_USER. 또는 Secrets 에 EC_HOST(user@host 또는 호스트만; 호스트만이면 EC2_USER 필요)."
             exit 1
           fi
           case "$EC_HOST" in
@@ -126,11 +151,11 @@ jobs:
               echo "host=${host}" >> "$GITHUB_OUTPUT"
               ;;
             *)
-              if [ -z "${EC_DEPLOY_USER:-}" ]; then
-                echo "::error::EC_HOST 에 @ 없음 — EC_DEPLOY_USER 시크릿에 SSH 사용자(예 ec2-user)를 설정하세요"
+              if [ -z "$DEPLOY_USER_MERGED" ]; then
+                echo "::error::EC_HOST 에 @ 없음 — EC2_USER 에 SSH 사용자(예 ec2-user)를 Variables 또는 Secrets 로 설정하세요"
                 exit 1
               fi
-              echo "user=${EC_DEPLOY_USER}" >> "$GITHUB_OUTPUT"
+              echo "user=${DEPLOY_USER_MERGED}" >> "$GITHUB_OUTPUT"
               echo "host=${EC_HOST}" >> "$GITHUB_OUTPUT"
               ;;
           esac
