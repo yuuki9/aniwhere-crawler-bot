@@ -13,7 +13,7 @@
 #   [권장] EC_HOST_SSH_FINGERPRINT — SSH 호스트 공개키 SHA256 지문(MITM 완화). 미설정 시 검증 생략
 #
 # .env 배포(runner 에서 만들어져 EC2 에 복사):
-#   CRAWLER_ENV_B64: production .env (base64). DB_HOST 등 DB 접속 설정 포함.
+#   CRAWLER_ENV_B64: production .env (base64 한 덩어리, 줄바꿈·공백 없이 권장: `base64 -w0 < .env`)
 #
 # 또는 CRAWLER_ENV_B64 생략 시 GitHub Secrets 로 최소 .env 생성(DB_*):
 #   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
@@ -198,45 +198,76 @@ jobs:
             REMOTE_DIR="/home/${{ steps.ec_host.outputs.user }}/aniwhere-crawler-bot"
             mkdir -p "$REMOTE_DIR"/data "$REMOTE_DIR"/output
             cd "$REMOTE_DIR"
+            echo "==> ChromaDB tarball 압축 해제"
             rm -rf "$REMOTE_DIR/chromadb"
             tar -xzf "$REMOTE_DIR/chromadb-deploy.tgz" -C "$REMOTE_DIR"
             rm -f "$REMOTE_DIR/chromadb-deploy.tgz"
-            URL=$(printf '%s' "$PRESIGN_B64" | base64 -d)
-            curl -fSL "$URL" -o /tmp/aniwhere-crawler-image.tar
-            sudo docker load -i /tmp/aniwhere-crawler-image.tar
-            rm -f /tmp/aniwhere-crawler-image.tar
-            umask 077
-            if [ -n "${CRAWLER_ENV_B64:-}" ]; then
-              printf '%s' "$CRAWLER_ENV_B64" | base64 -d > "$REMOTE_DIR/.env"
-            else
-              required_vars=(DB_HOST DB_PORT DB_NAME DB_USERNAME DB_PASSWORD)
-              for var in "${required_vars[@]}"; do
-                if [ -z "${!var:-}" ]; then
-                  echo "::error::$var secret is required when CRAWLER_ENV_B64 is not set"
-                  exit 1
-                fi
-              done
-              printf '%s\n' \
-                'APP_ENV=production' \
-                'APP_DEBUG=false' \
-                "DB_HOST=${DB_HOST}" \
-                "DB_PORT=${DB_PORT}" \
-                "DB_NAME=${DB_NAME}" \
-                "DB_USERNAME=${DB_USERNAME}" \
-                "DB_PASSWORD=${DB_PASSWORD}" \
-                > "$REMOTE_DIR/.env"
-            fi
-            chmod 600 "$REMOTE_DIR/.env" || true
+
             compose() {
               if sudo docker compose version >/dev/null 2>&1; then
                 sudo docker compose "$@"
               elif command -v docker-compose >/dev/null 2>&1; then
                 sudo docker-compose "$@"
               else
-                echo "docker compose not found"
+                echo "::error::docker compose / docker-compose 가 없습니다. EC2에 Docker Compose v2 플러그인 또는 docker-compose(v1)를 설치하세요."
                 exit 1
               fi
             }
+            echo "==> Docker / Compose 확인"
+            sudo docker version >/dev/null
+            compose version >/dev/null
+
+            echo "==> .env 작성 (CRAWLER_ENV_B64 또는 DB_* 시크릿)"
+            umask 077
+            if [ -n "${CRAWLER_ENV_B64:-}" ]; then
+              B64_CLEAN=$(printf '%s' "$CRAWLER_ENV_B64" | tr -d ' \t\r\n')
+              if ! printf '%s' "$B64_CLEAN" | base64 -d > "$REMOTE_DIR/.env" 2>/tmp/b64_err; then
+                echo "::error::CRAWLER_ENV_B64 Base64 디코딩 실패. 예: base64 -w0 < .env 를 그대로 시크릿에 넣기"
+                sed 's/^/    /' /tmp/b64_err >&2 || true
+                exit 1
+              fi
+              if [ ! -s "$REMOTE_DIR/.env" ]; then
+                echo "::error::디코딩된 .env가 비어 있습니다."
+                exit 1
+              fi
+            else
+              for var in DB_HOST DB_PORT DB_NAME DB_USERNAME DB_PASSWORD; do
+                val=$(printenv "$var" || true)
+                if [ -z "$val" ]; then
+                  echo "::error::$var 가 비어 있거나 Actions에서 전달되지 않았습니다. 시크릿을 설정하거나 CRAWLER_ENV_B64를 사용하세요."
+                  exit 1
+                fi
+              done
+              printf '%s\n' \
+                'APP_ENV=production' \
+                'APP_DEBUG=false' \
+                "DB_HOST=$(printenv DB_HOST)" \
+                "DB_PORT=$(printenv DB_PORT)" \
+                "DB_NAME=$(printenv DB_NAME)" \
+                "DB_USERNAME=$(printenv DB_USERNAME)" \
+                "DB_PASSWORD=$(printenv DB_PASSWORD)" \
+                > "$REMOTE_DIR/.env"
+            fi
+            chmod 600 "$REMOTE_DIR/.env" || true
+
+            echo "==> Presigned URL 디코딩"
+            PURL=$(printf '%s' "$PRESIGN_B64" | tr -d ' \t\r\n' | base64 -d) || { echo "::error::PRESIGN_B64 디코딩 실패"; exit 1; }
+            if [ -z "$PURL" ]; then
+              echo "::error::presigned URL이 비어 있습니다."
+              exit 1
+            fi
+
+            echo "==> 이미지 tarball 다운로드 (용량·시간 소요)"
+            curl -fSL "$PURL" -o /tmp/aniwhere-crawler-image.tar
+            echo "==> docker load"
+            sudo docker load -i /tmp/aniwhere-crawler-image.tar
+            rm -f /tmp/aniwhere-crawler-image.tar
+
+            echo "==> docker compose up"
             compose -f docker-compose.ec2.image.yml down 2>/dev/null || true
-            compose -f docker-compose.ec2.image.yml up -d
+            if ! compose -f docker-compose.ec2.image.yml up -d; then
+              echo "::error::docker compose up 실패 — 컨테이너 로그(최근):"
+              compose -f docker-compose.ec2.image.yml logs --tail 120 || true
+              exit 1
+            fi
             sudo docker ps -a --filter name=aniwhere-crawler-bot
