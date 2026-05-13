@@ -109,7 +109,15 @@ async def _anilist_graphql(query: str, variables: dict[str, Any]) -> dict[str, A
 
     errs = body.get("errors")
     if errs:
-        msg = errs[0].get("message", str(errs)) if isinstance(errs, list) else str(errs)
+        if isinstance(errs, list) and errs:
+            err0 = errs[0]
+            msg = (
+                err0.get("message", str(errs))
+                if isinstance(err0, dict)
+                else str(err0)
+            )
+        else:
+            msg = str(errs)
         logger.warning("[api] AniList GraphQL errors: %s", errs)
         raise HTTPException(502, f"AniList GraphQL 오류: {msg}")
 
@@ -150,6 +158,13 @@ async def trending_anime(
     settings = get_settings()
     key = (settings.tmdb_api_key or "").strip() or None
     media_out = await attach_korean_titles(key, media_raw)
+    if len(media_out) != len(media_raw):
+        logger.warning(
+            "[api] attach_korean_titles 길이 불일치 (%s != %s), koreanTitle 미보강으로 폴백",
+            len(media_out),
+            len(media_raw),
+        )
+        media_out = [{**m, "koreanTitle": None} for m in media_raw]
     media_out.sort(
         key=lambda m: (
             -max(0, int((m.get("popularity") or 0))),
@@ -191,8 +206,9 @@ async def media_by_id(
 
     settings = get_settings()
     key = (settings.tmdb_api_key or "").strip() or None
-    enriched = await attach_korean_titles(key, [raw])
-    r0 = enriched[0]
+    base = raw if isinstance(raw, dict) else {}
+    enriched = await attach_korean_titles(key, [base])
+    r0 = enriched[0] if enriched else {**base, "koreanTitle": None}
 
     logger.info(
         "[api] GET /api/v1/anilist/media/%s | tmdb=%s",

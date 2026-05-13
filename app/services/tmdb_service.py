@@ -82,7 +82,10 @@ async def attach_korean_titles(
     *,
     max_concurrent: int = 6,
 ) -> list[dict[str, Any]]:
-    """각 항목에 `koreanTitle` 키를 붙임. TMDB 키 없거나 쿼리 없으면 None."""
+    """각 항목에 `koreanTitle` 키를 붙임. TMDB 키 없거나 쿼리 없으면 None.
+
+    반환 리스트 길이는 항상 `media_items` 와 동일(개별 보강 실패 시 해당 항목만 `koreanTitle=None`).
+    """
     if not api_key:
         return [{**m, "koreanTitle": None} for m in media_items]
 
@@ -109,5 +112,16 @@ async def attach_korean_titles(
         return {**item, "koreanTitle": ko}
 
     async with httpx.AsyncClient(timeout=20.0) as client:
-        out = await asyncio.gather(*[enrich_one(client, m) for m in media_items])
-    return list(out)
+        results = await asyncio.gather(
+            *[enrich_one(client, m) for m in media_items],
+            return_exceptions=True,
+        )
+    out: list[dict[str, Any]] = []
+    for i, res in enumerate(results):
+        item = media_items[i]
+        if isinstance(res, BaseException):
+            logger.warning("[tmdb] 한글 표제 보강 실패 idx=%s: %s", i, res)
+            out.append({**item, "koreanTitle": None})
+        else:
+            out.append(res)
+    return out
