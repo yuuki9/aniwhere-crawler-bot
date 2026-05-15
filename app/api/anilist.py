@@ -1,14 +1,18 @@
 """AniList GraphQL 프록시 (https://docs.anilist.co/guide/introduction)"""
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.core.config import get_settings
-from app.schemas.anilist import AnilistMediaDetailResponse, TrendingAnimePageResponse
+from app.schemas.anilist import (
+    AnilistMediaDetailResponse,
+    TrendingAnimePageResponse,
+    WorksCatalogSyncResponse,
+)
 from app.services.anilist_graphql import (
     MEDIA_BY_ID_QUERY,
     TRENDING_ANIME_QUERY,
@@ -16,11 +20,27 @@ from app.services.anilist_graphql import (
     exclude_english_season_titles,
     post_anilist_graphql,
 )
+from app.services.anilist_works_sync_service import sync_popular_anime_to_works
 from app.services.tmdb_service import attach_korean_titles
 
 router = APIRouter(prefix="/api/v1/anilist", tags=["AniList"])
 limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger(__name__)
+
+
+def require_works_sync_key(
+    x_works_sync_key: Annotated[str | None, Header(alias="X-Works-Sync-Key")] = None,
+) -> None:
+    """환경변수 WORKS_SYNC_API_KEY 와 일치해야 함."""
+    expected = (get_settings().works_sync_api_key or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="WORKS_SYNC_API_KEY 미설정 — 동기화 API 비활성화",
+        )
+    got = (x_works_sync_key or "").strip()
+    if got != expected:
+        raise HTTPException(status_code=401, detail="동기화 키가 올바르지 않습니다")
 
 
 async def _anilist_graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -127,4 +147,47 @@ async def media_by_id(
         title=r0.get("title"),
         koreanTitle=r0.get("koreanTitle"),
         tmdbLogoUrl=r0.get("tmdbLogoUrl"),
+    )
+
+
+@router.post(
+    "/sync-works",
+    response_model=WorksCatalogSyncResponse,
+    summary="works 카탈로그 동기화 (AniList 인기 애니)",
+    description=(
+        "AniList 인기순 애니 페이지를 순회해 MySQL `works`에 upsert합니다. "
+        "헤더 `X-Works-Sync-Key`에 환경변수 `WORKS_SYNC_API_KEY`와 동일한 값이 필요합니다."
+    ),
+)
+@limiter.limit("12/hour")
+async def sync_works_catalog(
+    request: Request,
+    _: Annotated[None, Depends(require_works_sync_key)],
+    max_pages: int = Query(
+        20,
+        ge=1,
+        le=100,
+        alias="maxPages",
+        description="최대 Page 순회 수",
+    ),
+    per_page: int = Query(
+        50,
+        ge=1,
+        le=50,
+        alias="perPage",
+        description="페이지당 미디어 수 (AniList 상한 50)",
+    ),
+):
+    client_host = getattr(request.client, "host", None)
+    logger.info(
+        "[api] POST /api/v1/anilist/sync-works | maxPages=%s perPage=%s client=%s",
+        max_pages,
+        per_page,
+        client_host,
+    )
+    stats = await sync_popular_anime_to_works(max_pages=max_pages, per_page=per_page)
+    return WorksCatalogSyncResponse(
+        pagesFetched=stats.pages_fetched,
+        mediaProcessed=stats.media_processed,
+        worksUpserted=stats.works_upserted,
     )

@@ -60,7 +60,10 @@ class Settings(BaseSettings):
     pipeline_max_blog_links_crawl: int = 5
 
     # TMDB v3 (AniList 응답에 한글 제목 보강)
-    tmdb_api_key: str = "f1e4b3eb2c4842e70544eed062b139af"
+    tmdb_api_key: str = ""
+
+    # MySQL works 카탈로그 동기화 POST — 비어 있으면 엔드포인트 비활성화(503)
+    works_sync_api_key: str = ""
 
 
 @lru_cache
