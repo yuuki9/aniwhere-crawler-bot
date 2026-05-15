@@ -2,13 +2,240 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import aiomysql
+from pymysql.err import IntegrityError
 
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+WORK_NAME_MAX_LEN = 100
+WORK_TITLE_MAX_LEN = 512
+WORK_URL_MAX_LEN = 1024
+
+
+def _truncate_str(value: object | None, max_len: int) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    return s[:max_len]
+
+
+def _popularity_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _display_name_for_work(media: dict) -> str:
+    """스펙: COALESCE(korean, romaji, english, native); `name` 컬럼 길이 제한 적용."""
+    title = media.get("title") if isinstance(media.get("title"), dict) else {}
+    order = (
+        str(media.get("koreanTitle") or "").strip(),
+        str(title.get("romaji") or "").strip(),
+        str(title.get("english") or "").strip(),
+        str(title.get("native") or "").strip(),
+    )
+    for part in order:
+        if part:
+            return part[:WORK_NAME_MAX_LEN]
+    aid = media.get("id")
+    if aid is not None:
+        return f"anilist:{aid}"[:WORK_NAME_MAX_LEN]
+    return "unknown"[:WORK_NAME_MAX_LEN]
+
+
+def _fallback_work_name(base: str, anilist_id: int) -> str:
+    suffix = f" [{anilist_id}]"
+    room = WORK_NAME_MAX_LEN - len(suffix)
+    head = (base[:room] if room > 0 else "").rstrip()
+    return (head + suffix)[:WORK_NAME_MAX_LEN]
+
+
+async def upsert_work_anilist_catalog(pool: aiomysql.Pool, media: dict) -> int:
+    """
+    AniList(+TMDB 보강) 1건을 `works`에 반영한다.
+    우선 `anilist_id` 매칭 → 없으면 동일 `name`이면서 `anilist_id` NULL 인 레거시 행 갱신 → 그 외 INSERT.
+    """
+    aid_raw = media.get("id")
+    if aid_raw is None:
+        raise ValueError("media 에 AniList id 가 없습니다")
+    anilist_id = int(aid_raw)
+
+    title = media.get("title") if isinstance(media.get("title"), dict) else {}
+    title_romaji = _truncate_str(title.get("romaji"), WORK_TITLE_MAX_LEN)
+    title_english = _truncate_str(title.get("english"), WORK_TITLE_MAX_LEN)
+    title_native = _truncate_str(title.get("native"), WORK_TITLE_MAX_LEN)
+    korean_title = _truncate_str(media.get("koreanTitle"), WORK_TITLE_MAX_LEN)
+
+    genres_raw = media.get("genres") or []
+    if not isinstance(genres_raw, list):
+        genres_raw = []
+    genres_list = [str(g).strip() for g in genres_raw if isinstance(g, str) and str(g).strip()]
+    genres_json = json.dumps(genres_list, ensure_ascii=False) if genres_list else None
+
+    cover = media.get("coverImage") if isinstance(media.get("coverImage"), dict) else {}
+    cover_url = _truncate_str(cover.get("extraLarge") or cover.get("large"), WORK_URL_MAX_LEN)
+    tmdb_logo_url = _truncate_str(media.get("tmdbLogoUrl"), WORK_URL_MAX_LEN)
+    popularity = _popularity_int(media.get("popularity"))
+
+    name = _display_name_for_work(media)
+
+    update_sql = """
+        UPDATE works SET
+            name = %s,
+            title_romaji = %s,
+            title_english = %s,
+            title_native = %s,
+            korean_title = %s,
+            genres = %s,
+            cover_url = %s,
+            tmdb_logo_url = %s,
+            popularity = %s,
+            anilist_synced_at = UTC_TIMESTAMP(6)
+        WHERE id = %s
+    """
+    params_tail = (
+        name,
+        title_romaji,
+        title_english,
+        title_native,
+        korean_title,
+        genres_json,
+        cover_url,
+        tmdb_logo_url,
+        popularity,
+    )
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT id FROM works WHERE anilist_id = %s",
+                (anilist_id,),
+            )
+            row = await cur.fetchone()
+            if row:
+                wid = int(row[0])
+                await cur.execute(update_sql, (*params_tail, wid))
+                logger.debug("[mysql] works UPDATE by anilist_id | id=%s anilist_id=%s", wid, anilist_id)
+                return wid
+
+            await cur.execute(
+                "SELECT id, anilist_id FROM works WHERE name = %s LIMIT 1",
+                (name,),
+            )
+            row = await cur.fetchone()
+            if row:
+                wid = int(row[0])
+                existing_aid = row[1]
+                if existing_aid is None:
+                    await cur.execute(
+                        """
+                        UPDATE works SET
+                            anilist_id = %s,
+                            name = %s,
+                            title_romaji = %s,
+                            title_english = %s,
+                            title_native = %s,
+                            korean_title = %s,
+                            genres = %s,
+                            cover_url = %s,
+                            tmdb_logo_url = %s,
+                            popularity = %s,
+                            anilist_synced_at = UTC_TIMESTAMP(6)
+                        WHERE id = %s
+                        """,
+                        (
+                            anilist_id,
+                            *params_tail,
+                            wid,
+                        ),
+                    )
+                    logger.info(
+                        "[mysql] works 레거시 행에 anilist_id 부여 | id=%s anilist_id=%s name=%r",
+                        wid,
+                        anilist_id,
+                        name,
+                    )
+                    return wid
+                if int(existing_aid) == anilist_id:
+                    await cur.execute(update_sql, (*params_tail, wid))
+                    return wid
+
+                name = _fallback_work_name(name, anilist_id)
+
+            insert_sql = """
+                INSERT INTO works (
+                    name, anilist_id, title_romaji, title_english, title_native,
+                    korean_title, genres, cover_url, tmdb_logo_url, popularity,
+                    anilist_synced_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(6)
+                )
+            """
+            insert_params = (
+                name,
+                anilist_id,
+                title_romaji,
+                title_english,
+                title_native,
+                korean_title,
+                genres_json,
+                cover_url,
+                tmdb_logo_url,
+                popularity,
+            )
+            try:
+                await cur.execute(insert_sql, insert_params)
+                new_id = int(cur.lastrowid)
+                logger.debug("[mysql] works INSERT | id=%s anilist_id=%s", new_id, anilist_id)
+                return new_id
+            except IntegrityError:
+                await cur.execute(
+                    "SELECT id FROM works WHERE anilist_id = %s",
+                    (anilist_id,),
+                )
+                row_race = await cur.fetchone()
+                if row_race:
+                    wid = int(row_race[0])
+                    await cur.execute(update_sql, (*params_tail, wid))
+                    logger.debug(
+                        "[mysql] works INSERT 경합 → UPDATE by anilist_id | id=%s",
+                        wid,
+                    )
+                    return wid
+                name2 = _fallback_work_name(_display_name_for_work(media), anilist_id)
+                await cur.execute(
+                    insert_sql,
+                    (
+                        name2,
+                        anilist_id,
+                        title_romaji,
+                        title_english,
+                        title_native,
+                        korean_title,
+                        genres_json,
+                        cover_url,
+                        tmdb_logo_url,
+                        popularity,
+                    ),
+                )
+                new_id = int(cur.lastrowid)
+                logger.info(
+                    "[mysql] works INSERT (유니크 충돌 후 보조 이름) | id=%s anilist_id=%s name=%r",
+                    new_id,
+                    anilist_id,
+                    name2,
+                )
+                return new_id
 
 
 async def get_db_pool():

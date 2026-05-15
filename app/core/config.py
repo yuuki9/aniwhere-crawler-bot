@@ -9,6 +9,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # TMDB_API_KEY= 처럼 빈 값이 환경에 있으면 필드 기본값을 유지 (Docker Compose 등)
+        env_ignore_empty=True,
     )
 
     # App
@@ -59,7 +61,7 @@ class Settings(BaseSettings):
     pipeline_sleep_sec: float = 15.0
     pipeline_max_blog_links_crawl: int = 5
 
-    # TMDB v3 (AniList 응답에 한글 제목 보강)
+    # TMDB v3 (AniList 응답에 한글 제목 보강) — 환경변수 TMDB_API_KEY 가 있으면 그 값이 우선
     tmdb_api_key: str = "f1e4b3eb2c4842e70544eed062b139af"
 
 

@@ -35,7 +35,11 @@ class AnilistMedia(BaseModel):
     trending: int | None = Field(None, description="트렌딩 스코어")
     koreanTitle: str | None = Field(
         None,
-        description="TMDB TV (ko-KR) 표제 — 서버에서 보강",
+        description="TMDB ko-KR `name` (AniList title 영문→로마자→원문 순으로 search 시도)",
+    )
+    tmdbLogoUrl: str | None = Field(
+        None,
+        description="TMDB TV logos 중 선정한 로고 이미지 절대 URL (image.tmdb.org)",
     )
 
     @field_validator("genres", mode="before")
@@ -60,6 +64,14 @@ class TrendingAnimePageResponse(BaseModel):
     media: list[AnilistMedia] = Field(default_factory=list)
 
 
+class WorksCatalogSyncResponse(BaseModel):
+    """POST /api/v1/anilist/sync-works — MySQL works 동기화 결과"""
+
+    pagesFetched: int
+    mediaProcessed: int
+    worksUpserted: int
+
+
 class AnilistMediaDetailResponse(BaseModel):
     """AniList Media 단건 (/api/v1/anilist/media/{id})"""
 
@@ -67,5 +79,9 @@ class AnilistMediaDetailResponse(BaseModel):
     title: AnilistTitle | None = None
     koreanTitle: str | None = Field(
         None,
-        description="TMDB TV (ko-KR) 표제 — 서버에서 보강",
+        description="TMDB ko-KR `name` (AniList title 영문→로마자→원문 순으로 search 시도)",
+    )
+    tmdbLogoUrl: str | None = Field(
+        None,
+        description="TMDB TV logos 중 선정한 로고 이미지 절대 URL (image.tmdb.org)",
     )
