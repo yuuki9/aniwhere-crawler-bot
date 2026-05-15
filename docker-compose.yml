@@ -1,0 +1,21 @@
+# 로컬에서 이미지 빌드 후 기동. DB 설정은 aniwhere-sql-ddl/.env 의 MYSQL_* 를 사용합니다.
+#
+#   docker compose --env-file ../aniwhere-sql-ddl/.env up --build -d
+#
+# (TMDB 보강은 동일 파일에 TMDB_API_KEY=... 추가하거나, 아래 environment 에 직접 넣으세요.)
+
+services:
+  api:
+    build: .
+    image: aniwhere-crawler-bot:local
+    container_name: aniwhere-crawler-api
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: ${MYSQL_HOST}
+      DB_PORT: ${MYSQL_PORT}
+      DB_USERNAME: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      DB_NAME: ${MYSQL_DATABASE}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      PYTHONPATH: /app
