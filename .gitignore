@@ -29,6 +29,9 @@ data/
 # 파이프라인·로컬 산출물 (RAG는 Chroma만 사용, 배포 시 미전송)
 output/
 
+# Chroma: 로컬 파이프라인이 만든 세그먼트 디렉터리(UUID). 레포에는 chroma.sqlite3 등 베이스만 유지.
+chromadb/*/
+
 # IDE
 .idea/
 .vscode/
