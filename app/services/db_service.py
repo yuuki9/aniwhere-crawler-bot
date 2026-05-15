@@ -251,6 +251,24 @@ async def get_db_pool():
     )
 
 
+async def fetch_works_catalog_rows(pool: aiomysql.Pool) -> list[dict]:
+    """
+    `works` 전행에서 카탈로그 매칭에 쓸 제목 컬럼만 가져온다.
+    행 순서: id 오름차순 (청크 분할 안정화).
+    """
+    sql = """
+        SELECT id, name, korean_title, title_romaji, title_english, title_native
+        FROM works
+        ORDER BY id ASC
+    """
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(sql)
+            col_names = [d[0] for d in cur.description]
+            rows = await cur.fetchall()
+            return [dict(zip(col_names, tup)) for tup in rows]
+
+
 async def _resolve_region_id(cur: aiomysql.Cursor, region: str | None) -> int | None:
     """regions.name 과 일치할 때만 region_id (aniwhere_schema)."""
     if region is None:
@@ -327,11 +345,11 @@ async def update_shop_in_db(pool: aiomysql.Pool, shop_id: int, rdb_data: dict) -
     """
     shop_name = rdb_data.get("name")
     logger.info(
-        "[mysql] UPDATE shops 시작 | shop_id=%s | name=%r | categories=%s | works=%s",
+        "[mysql] UPDATE shops 시작 | shop_id=%s | name=%r | categories=%s | work_ids=%s",
         shop_id,
         shop_name,
         len(rdb_data.get("categories") or []),
-        len(rdb_data.get("works") or []),
+        len(rdb_data.get("work_ids") or []),
     )
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -373,10 +391,12 @@ async def update_shop_in_db(pool: aiomysql.Pool, shop_id: int, rdb_data: dict) -
                     (shop_id, cid),
                 )
 
-            for work in rdb_data.get("works") or []:
-                if not str(work).strip():
+            work_ids = rdb_data.get("work_ids") or []
+            for raw in work_ids:
+                try:
+                    wid = int(raw)
+                except (TypeError, ValueError):
                     continue
-                wid = await _ensure_work_id(cur, str(work))
                 await cur.execute(
                     "INSERT IGNORE INTO shop_works (shop_id, work_id) VALUES (%s, %s)",
                     (shop_id, wid),
@@ -405,10 +425,10 @@ async def save_shop_to_db(pool: aiomysql.Pool, rdb_data: dict) -> int:
     """
     shop_name = rdb_data.get("name")
     logger.info(
-        "[mysql] INSERT shops 시작 | name=%r | categories=%s | works=%s",
+        "[mysql] INSERT shops 시작 | name=%r | categories=%s | work_ids=%s",
         shop_name,
         len(rdb_data.get("categories") or []),
-        len(rdb_data.get("works") or []),
+        len(rdb_data.get("work_ids") or []),
     )
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -444,10 +464,12 @@ async def save_shop_to_db(pool: aiomysql.Pool, rdb_data: dict) -> int:
                     (shop_id, cid),
                 )
 
-            for work in rdb_data.get("works") or []:
-                if not str(work).strip():
+            work_ids = rdb_data.get("work_ids") or []
+            for raw in work_ids:
+                try:
+                    wid = int(raw)
+                except (TypeError, ValueError):
                     continue
-                wid = await _ensure_work_id(cur, str(work))
                 await cur.execute(
                     "INSERT IGNORE INTO shop_works (shop_id, work_id) VALUES (%s, %s)",
                     (shop_id, wid),

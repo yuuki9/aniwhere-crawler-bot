@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.services.blog_crawl_service import crawl_blog_context
 from app.services.chroma_ingest_service import upsert_shop_knowledge
 from app.services.db_service import (
+    fetch_works_catalog_rows,
     get_db_pool,
     get_shop_id_by_name,
     save_shop_to_db,
@@ -35,7 +36,13 @@ from app.services.db_service import (
     upsert_shop_details,
 )
 from app.services.naver_search_service import collect_blog_urls, save_blog_csv
-from app.services.refine_service import refine_shop, save_knowledge_base_doc
+from app.services.refine_service import refine_shop_with_catalog, save_knowledge_base_doc
+from app.services.works_catalog_snapshot import (
+    CatalogWorkLine,
+    allowed_ids_from_lines,
+    chunk_catalog_lines,
+    row_dict_to_catalog_line,
+)
 from app.utils.local_csv import load_shop_records_from_csv
 
 logging.basicConfig(
@@ -103,6 +110,8 @@ async def _process_one_shop(
     update_existing: bool,
     max_blog_links: int,
     output_dir: str,
+    catalog_chunks: list[list[CatalogWorkLine]],
+    allowed_work_ids: set[int],
 ) -> ShopPipelineResult:
     name = shop.name
     logger.info("[pipeline %s/%s] 시작 | shop=%r", idx, total, name)
@@ -147,7 +156,12 @@ async def _process_one_shop(
         name,
         len(crawl_text),
     )
-    result = await refine_shop(shop, crawl_text)
+    result = await refine_shop_with_catalog(
+        shop,
+        crawl_text,
+        catalog_chunks,
+        allowed_work_ids=allowed_work_ids,
+    )
     if result.get("error"):
         err = str(result["error"])
         logger.warning(
@@ -345,10 +359,24 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
     logger.info("[pipeline] 단계=shop_loop | 총_상점=%s", len(records))
 
     pool = None
+    catalog_chunks: list[list[CatalogWorkLine]] = []
+    allowed_work_ids: set[int] = set()
     if args.mysql:
         logger.info("[pipeline] 단계=mysql_pool | 연결_시도")
         pool = await get_db_pool()
         logger.info("[pipeline] 단계=mysql_pool | 연결_완료")
+        raw_rows = await fetch_works_catalog_rows(pool)
+        catalog_lines = [
+            ln for ln in (row_dict_to_catalog_line(r) for r in raw_rows) if ln is not None
+        ]
+        allowed_work_ids = allowed_ids_from_lines(catalog_lines)
+        catalog_chunks = chunk_catalog_lines(catalog_lines, settings.refine_catalog_chunk_max_chars)
+        logger.info(
+            "[pipeline] 단계=works_catalog | catalog_lines=%s chunks=%s allowed_ids=%s",
+            len(catalog_lines),
+            len(catalog_chunks),
+            len(allowed_work_ids),
+        )
 
     max_links = args.max_blog_links or settings.pipeline_max_blog_links_crawl
     sleep_sec = args.sleep if args.sleep is not None else settings.pipeline_sleep_sec
@@ -366,6 +394,8 @@ async def run_pipeline_async(args: argparse.Namespace) -> int:
                 update_existing=args.update_existing,
                 max_blog_links=max_links,
                 output_dir=settings.output_dir,
+                catalog_chunks=catalog_chunks,
+                allowed_work_ids=allowed_work_ids,
             )
             results.append(r)
             if i < len(records) and sleep_sec > 0:
