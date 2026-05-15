@@ -35,7 +35,7 @@ class AnilistMedia(BaseModel):
     trending: int | None = Field(None, description="트렌딩 스코어")
     koreanTitle: str | None = Field(
         None,
-        description="TMDB TV 표제 — ko-KR 우선, 비면 en-US·ja-JP 등으로 보간",
+        description="TMDB ko-KR `name` (AniList title 영문→로마자→원문 순으로 search 시도)",
     )
     tmdbLogoUrl: str | None = Field(
         None,
@@ -79,7 +79,7 @@ class AnilistMediaDetailResponse(BaseModel):
     title: AnilistTitle | None = None
     koreanTitle: str | None = Field(
         None,
-        description="TMDB TV 표제 — ko-KR 우선, 비면 en-US·ja-JP 등으로 보간",
+        description="TMDB ko-KR `name` (AniList title 영문→로마자→원문 순으로 search 시도)",
     )
     tmdbLogoUrl: str | None = Field(
         None,

@@ -43,8 +43,8 @@ async def _anilist_graphql(query: str, variables: dict[str, Any]) -> dict[str, A
         "AniList GraphQL `Page.media(sort: POPULARITY_DESC, type: ANIME)` 결과를 반환합니다. "
         "`popularity` 내림차순으로 정렬됩니다(Tie-break id). "
         "`title.english`에 `Season`이 포함된 항목(분리 시즌 엔트리 등)은 결과에서 제외합니다. "
-        "`TMDB_API_KEY`가 있으면 [TMDB](https://api.themoviedb.org/3/tv)에서 표제(`koreanTitle`, ko 우선·없으면 en/ja 보간)와 "
-        "로고 이미지 URL(`tmdbLogoUrl`)을 붙입니다. "
+        "`TMDB_API_KEY`가 있으면 AniList `title`(english→romaji→native)로 TMDB `search/tv`를 순차 시도해 "
+        "한글 표제(`koreanTitle`, ko-KR `name`)와 로고 URL(`tmdbLogoUrl`)을 붙입니다. "
         "[AniList API 소개](https://docs.anilist.co/guide/introduction)"
     ),
 )
@@ -102,7 +102,8 @@ async def trending_anime(
     summary="Media 단건 (제목 등)",
     description=(
         "`Media(id)` — `title.romaji/english/native`, `seasonYear`. "
-        "`TMDB_API_KEY`가 있으면 TMDB에서 표제(`koreanTitle`, ko 우선·없으면 en/ja 보간)와 로고 URL(`tmdbLogoUrl`)을 붙입니다. "
+        "`TMDB_API_KEY`가 있으면 AniList `title`로 TMDB 검색을 순차 시도해 "
+        "한글 표제(`koreanTitle`)와 로고 URL(`tmdbLogoUrl`)을 붙입니다. "
         "[AniList GraphQL](https://docs.anilist.co/guide/graphql/)"
     ),
 )

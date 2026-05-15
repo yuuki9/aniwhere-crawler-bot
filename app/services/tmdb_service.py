@@ -1,4 +1,4 @@
-"""TMDB v3: 영문 검색 후 표제(ko 우선)·로고 URL 보강 (https://developer.themoviedb.org/reference/search-tv)"""
+"""TMDB v3: AniList title 로 search/tv 여러 번 시도 후 ko-KR 표제·로고 보강."""
 
 import asyncio
 import logging
@@ -13,24 +13,26 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
 _TMDB_LOGO_SIZE = "w500"
 
 
-def _non_empty_title_field(detail: dict[str, Any]) -> str | None:
-    """TMDB tv 상세에서 `name` 우선, 비었으면 `original_name`."""
-    for key in ("name", "original_name"):
-        v = detail.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
-
-
-def tmdb_search_query_from_titles(title: dict[str, Any]) -> str:
+def tmdb_search_queries_from_anilist_title(title: dict[str, Any]) -> list[str]:
     """
-    `english` 우선, 없으면 `romaji`. — `search/tv`는 이 문자열로 한 번만 호출.
+    AniList `title`에서 TMDB `search/tv`에 쓸 문자열 순서 (중복 제거).
+
+    `english` → `romaji` → `native` 순으로 각각 별도 검색 시도.
     """
     if not isinstance(title, dict):
         title = {}
-    english = (title.get("english") or "").strip()
-    romaji = (title.get("romaji") or "").strip()
-    return english if english else romaji
+    out: list[str] = []
+    for key in ("english", "romaji", "native"):
+        v = (title.get(key) or "").strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def tmdb_search_query_from_titles(title: dict[str, Any]) -> str:
+    """첫 번째 검색어 (english 우선, 없으면 romaji, …). 호환용."""
+    qs = tmdb_search_queries_from_anilist_title(title)
+    return qs[0] if qs else ""
 
 
 def _tmdb_logo_url_from_logos(logos: list[Any]) -> str | None:
@@ -82,24 +84,6 @@ async def lookup_korean_tv_title(
     return title
 
 
-async def _tv_detail_title_fallback(
-    client: httpx.AsyncClient,
-    *,
-    tv_id: int,
-    api_key: str,
-    language: str,
-) -> str | None:
-    """추가 언어로 상세 1회 조회 후 표제 보간."""
-    r = await client.get(
-        f"{TMDB_API_BASE}/tv/{tv_id}",
-        params={"api_key": api_key, "language": language},
-    )
-    if r.status_code != 200:
-        logger.debug("[tmdb] tv/%s %s 실패 status=%s", tv_id, language, r.status_code)
-        return None
-    return _non_empty_title_field(r.json())
-
-
 async def lookup_tmdb_tv_metadata(
     client: httpx.AsyncClient,
     *,
@@ -108,9 +92,8 @@ async def lookup_tmdb_tv_metadata(
     first_air_date_year: int | None = None,
 ) -> tuple[str | None, str | None]:
     """
-    `search/tv` 로 TV id 확보 후,
-    상세는 ko-KR → (비면) original_name 동일 응답 → en-US → ja-JP 순으로 표제 보간.
-    로고는 images 1회. 모두 비면 (None, 로고 또는 None).
+    단일 `search/tv` 쿼리 후 TV id로 `language=ko-KR` 상세의 **`name`만** 표제로 사용.
+    (비면 표제 None — en/ja 보간 없음.) 로고는 images 1회.
     """
     q = (search_query or "").strip()
     if not api_key or not q:
@@ -153,21 +136,14 @@ async def lookup_tmdb_tv_metadata(
         )
         r_detail, r_img = await asyncio.gather(detail_coro, images_coro)
 
-        resolved_title: str | None = None
+        korean_name: str | None = None
         if r_detail.status_code == 200:
             detail = r_detail.json()
-            resolved_title = _non_empty_title_field(detail)
+            name = detail.get("name")
+            if isinstance(name, str) and name.strip():
+                korean_name = name.strip()
         else:
             logger.debug("[tmdb] tv/%s ko-KR 실패 status=%s", tv_id, r_detail.status_code)
-
-        if not resolved_title:
-            resolved_title = await _tv_detail_title_fallback(
-                client, tv_id=tv_id, api_key=api_key, language="en-US"
-            )
-        if not resolved_title:
-            resolved_title = await _tv_detail_title_fallback(
-                client, tv_id=tv_id, api_key=api_key, language="ja-JP"
-            )
 
         logo_url: str | None = None
         if r_img.status_code == 200:
@@ -177,7 +153,7 @@ async def lookup_tmdb_tv_metadata(
         else:
             logger.debug("[tmdb] tv/%s/images 실패 status=%s", tv_id, r_img.status_code)
 
-        return resolved_title, logo_url
+        return korean_name, logo_url
     except httpx.HTTPError:
         logger.exception("[tmdb] HTTP 오류")
         return None, None
@@ -202,21 +178,34 @@ async def attach_korean_titles(
         title = item.get("title") or {}
         if not isinstance(title, dict):
             title = {}
-        q = tmdb_search_query_from_titles(title).strip()
-        if not q:
+        queries = tmdb_search_queries_from_anilist_title(title)
+        if not queries:
             return {**item, "koreanTitle": None, "tmdbLogoUrl": None}
 
         year = item.get("seasonYear")
         first_year = int(year) if isinstance(year, int) else None
 
+        best_ko: str | None = None
+        best_logo: str | None = None
+
         async with sem:
-            ko, logo_url = await lookup_tmdb_tv_metadata(
-                client,
-                api_key=api_key,
-                search_query=q,
-                first_air_date_year=first_year,
-            )
-        return {**item, "koreanTitle": ko, "tmdbLogoUrl": logo_url}
+            for idx, q in enumerate(queries):
+                ko, logo_url = await lookup_tmdb_tv_metadata(
+                    client,
+                    api_key=api_key,
+                    search_query=q,
+                    first_air_date_year=first_year,
+                )
+                if logo_url and best_logo is None:
+                    best_logo = logo_url
+                if ko:
+                    best_ko = ko
+                    best_logo = logo_url or best_logo
+                    break
+                if idx > 0:
+                    logger.debug("[tmdb] 보조 검색어 시도 — 아직 ko-KR name 없음 | query=%r", q[:80])
+
+        return {**item, "koreanTitle": best_ko, "tmdbLogoUrl": best_logo}
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         results = await asyncio.gather(
