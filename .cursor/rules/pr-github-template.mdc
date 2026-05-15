@@ -1,0 +1,14 @@
+---
+description: PR 본문은 .github/PULL_REQUEST_TEMPLATE.md 형식·gh --body-file 사용
+alwaysApply: true
+---
+
+# GitHub PR 본문 (템플릿 준수)
+
+이 레포에서 **Pull Request를 만들거나 본문을 수정할 때** 다음을 따른다.
+
+1. **`.github/PULL_REQUEST_TEMPLATE.md`**의 섹션 구조(요약 한 줄, 변경 범위 체크박스, 맥락·확인한 것·머지 후 등)를 **유지**하고 빈 칸만 채운다.
+2. **`gh pr create --body "..."`**처럼 본문을 한 줄/임의 마크다운으로 넣지 않는다. 템플릿을 복사한 파일을 채운 뒤 **`gh pr create --body-file <경로>`** 또는 **`gh pr edit <번호> --body-file <경로>`**만 사용한다.
+3. 사용자가 **장기 기억(agentmemory)**에 남기길 원하면 MCP **`memory_save`**로 한 번 저장하고, 응답의 저장 성공·id를 채팅에 알린다(내용에 시크릿·토큰 없음).
+
+관련 파일: `.github/PULL_REQUEST_TEMPLATE.md`
