@@ -1,9 +1,9 @@
 """AniList GraphQL 프록시 (https://docs.anilist.co/guide/introduction)"""
 
 import logging
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -26,21 +26,6 @@ from app.services.tmdb_service import attach_korean_titles
 router = APIRouter(prefix="/api/v1/anilist", tags=["AniList"])
 limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger(__name__)
-
-
-def require_works_sync_key(
-    x_works_sync_key: Annotated[str | None, Header(alias="X-Works-Sync-Key")] = None,
-) -> None:
-    """환경변수 WORKS_SYNC_API_KEY 와 일치해야 함."""
-    expected = (get_settings().works_sync_api_key or "").strip()
-    if not expected:
-        raise HTTPException(
-            status_code=503,
-            detail="WORKS_SYNC_API_KEY 미설정 — 동기화 API 비활성화",
-        )
-    got = (x_works_sync_key or "").strip()
-    if got != expected:
-        raise HTTPException(status_code=401, detail="동기화 키가 올바르지 않습니다")
 
 
 async def _anilist_graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -155,20 +140,18 @@ async def media_by_id(
     response_model=WorksCatalogSyncResponse,
     summary="works 카탈로그 동기화 (AniList 인기 애니)",
     description=(
-        "AniList 인기순 애니 페이지를 순회해 MySQL `works`에 upsert합니다. "
-        "헤더 `X-Works-Sync-Key`에 환경변수 `WORKS_SYNC_API_KEY`와 동일한 값이 필요합니다."
+        "로컬 초기 데이터 구축용. AniList 인기순 애니 페이지(최대 5페이지)를 순회해 MySQL `works`에 upsert합니다. "
+        "인증·레이트리밋 없음 — 외부 노출 환경에서는 사용하지 마세요."
     ),
 )
-@limiter.limit("12/hour")
 async def sync_works_catalog(
     request: Request,
-    _: Annotated[None, Depends(require_works_sync_key)],
     max_pages: int = Query(
-        20,
+        5,
         ge=1,
-        le=100,
+        le=5,
         alias="maxPages",
-        description="최대 Page 순회 수",
+        description="순회할 Page 수 (1~5)",
     ),
     per_page: int = Query(
         50,
