@@ -1,4 +1,4 @@
-"""TMDB v3: 영문 검색 후 한국어(ko-KR) 표제·로고 URL 보강 (https://developer.themoviedb.org/reference/search-tv)"""
+"""TMDB v3: 영문 검색 후 표제(ko 우선)·로고 URL 보강 (https://developer.themoviedb.org/reference/search-tv)"""
 
 import asyncio
 import logging
@@ -13,39 +13,24 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
 _TMDB_LOGO_SIZE = "w500"
 
 
+def _non_empty_title_field(detail: dict[str, Any]) -> str | None:
+    """TMDB tv 상세에서 `name` 우선, 비었으면 `original_name`."""
+    for key in ("name", "original_name"):
+        v = detail.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 def tmdb_search_query_from_titles(title: dict[str, Any]) -> str:
     """
-    `english` 우선(`Attack on Titan Season 2` 등 시즌 표기 포함 그대로), 없으면 `romaji`.
-    작품당 TMDB 호출: search/tv 1회 + (상세 ko-KR, 이미지 logos) 병렬 2회.
-
-    다중 후보는 `tmdb_search_queries_from_title` 참고.
-    """
-    queries = tmdb_search_queries_from_title(title)
-    return queries[0] if queries else ""
-
-
-def tmdb_search_queries_from_title(title: dict[str, Any]) -> list[str]:
-    """
-    TMDB `search/tv` 에 순서대로 시도할 쿼리 문자열 (중복 제거).
-
-    1) 영문 표제가 있으면 우선, 없으면 로마자.
-    2) 한글 표제가 여전히 안 나오면 로마자·원어(native)를 각각 한 번씩 추가 시도 (이미 썼던 문자열은 생략).
+    `english` 우선, 없으면 `romaji`. — `search/tv`는 이 문자열로 한 번만 호출.
     """
     if not isinstance(title, dict):
         title = {}
     english = (title.get("english") or "").strip()
     romaji = (title.get("romaji") or "").strip()
-    native = (title.get("native") or "").strip()
-
-    out: list[str] = []
-    primary = english if english else romaji
-    if primary:
-        out.append(primary)
-    if romaji and romaji not in out:
-        out.append(romaji)
-    if native and native not in out:
-        out.append(native)
-    return out
+    return english if english else romaji
 
 
 def _tmdb_logo_url_from_logos(logos: list[Any]) -> str | None:
@@ -87,14 +72,32 @@ async def lookup_korean_tv_title(
     search_query: str,
     first_air_date_year: int | None = None,
 ) -> str | None:
-    """호환용: 한글 표제만 필요할 때 `lookup_tmdb_tv_metadata` 의 첫 반환값."""
-    ko, _logo = await lookup_tmdb_tv_metadata(
+    """호환용: 표제만 필요할 때 `lookup_tmdb_tv_metadata` 의 첫 반환값."""
+    title, _logo = await lookup_tmdb_tv_metadata(
         client,
         api_key=api_key,
         search_query=search_query,
         first_air_date_year=first_air_date_year,
     )
-    return ko
+    return title
+
+
+async def _tv_detail_title_fallback(
+    client: httpx.AsyncClient,
+    *,
+    tv_id: int,
+    api_key: str,
+    language: str,
+) -> str | None:
+    """추가 언어로 상세 1회 조회 후 표제 보간."""
+    r = await client.get(
+        f"{TMDB_API_BASE}/tv/{tv_id}",
+        params={"api_key": api_key, "language": language},
+    )
+    if r.status_code != 200:
+        logger.debug("[tmdb] tv/%s %s 실패 status=%s", tv_id, language, r.status_code)
+        return None
+    return _non_empty_title_field(r.json())
 
 
 async def lookup_tmdb_tv_metadata(
@@ -104,7 +107,11 @@ async def lookup_tmdb_tv_metadata(
     search_query: str,
     first_air_date_year: int | None = None,
 ) -> tuple[str | None, str | None]:
-    """search/tv 로 TV id를 찾은 뒤, ko-KR 표제와 로고 이미지 URL을 병렬로 조회."""
+    """
+    `search/tv` 로 TV id 확보 후,
+    상세는 ko-KR → (비면) original_name 동일 응답 → en-US → ja-JP 순으로 표제 보간.
+    로고는 images 1회. 모두 비면 (None, 로고 또는 None).
+    """
     q = (search_query or "").strip()
     if not api_key or not q:
         return None, None
@@ -146,14 +153,21 @@ async def lookup_tmdb_tv_metadata(
         )
         r_detail, r_img = await asyncio.gather(detail_coro, images_coro)
 
-        ko_name: str | None = None
+        resolved_title: str | None = None
         if r_detail.status_code == 200:
             detail = r_detail.json()
-            name = detail.get("name")
-            if isinstance(name, str) and name.strip():
-                ko_name = name.strip()
+            resolved_title = _non_empty_title_field(detail)
         else:
             logger.debug("[tmdb] tv/%s ko-KR 실패 status=%s", tv_id, r_detail.status_code)
+
+        if not resolved_title:
+            resolved_title = await _tv_detail_title_fallback(
+                client, tv_id=tv_id, api_key=api_key, language="en-US"
+            )
+        if not resolved_title:
+            resolved_title = await _tv_detail_title_fallback(
+                client, tv_id=tv_id, api_key=api_key, language="ja-JP"
+            )
 
         logo_url: str | None = None
         if r_img.status_code == 200:
@@ -163,7 +177,7 @@ async def lookup_tmdb_tv_metadata(
         else:
             logger.debug("[tmdb] tv/%s/images 실패 status=%s", tv_id, r_img.status_code)
 
-        return ko_name, logo_url
+        return resolved_title, logo_url
     except httpx.HTTPError:
         logger.exception("[tmdb] HTTP 오류")
         return None, None
@@ -188,37 +202,21 @@ async def attach_korean_titles(
         title = item.get("title") or {}
         if not isinstance(title, dict):
             title = {}
-        queries = tmdb_search_queries_from_title(title)
-        if not queries:
+        q = tmdb_search_query_from_titles(title).strip()
+        if not q:
             return {**item, "koreanTitle": None, "tmdbLogoUrl": None}
 
         year = item.get("seasonYear")
         first_year = int(year) if isinstance(year, int) else None
 
-        best_ko: str | None = None
-        best_logo: str | None = None
-
         async with sem:
-            for idx, q in enumerate(queries):
-                q = q.strip()
-                if not q:
-                    continue
-                ko, logo_url = await lookup_tmdb_tv_metadata(
-                    client,
-                    api_key=api_key,
-                    search_query=q,
-                    first_air_date_year=first_year,
-                )
-                if ko:
-                    best_ko = ko
-                    best_logo = logo_url
-                    break
-                if logo_url and best_logo is None:
-                    best_logo = logo_url
-                if idx > 0 and not ko:
-                    logger.debug("[tmdb] 보조 검색어 시도 후에도 ko 미활성 | query=%r", q[:80])
-
-        return {**item, "koreanTitle": best_ko, "tmdbLogoUrl": best_logo}
+            ko, logo_url = await lookup_tmdb_tv_metadata(
+                client,
+                api_key=api_key,
+                search_query=q,
+                first_air_date_year=first_year,
+            )
+        return {**item, "koreanTitle": ko, "tmdbLogoUrl": logo_url}
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         results = await asyncio.gather(
