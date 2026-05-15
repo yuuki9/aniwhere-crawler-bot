@@ -42,6 +42,7 @@ async def sync_popular_anime_to_works(
 
     pool = await get_db_pool()
     key = (tmdb_api_key if tmdb_api_key is not None else get_settings().tmdb_api_key or "").strip() or None
+    logger.info("[sync] TMDB 보강 %s", "활성" if key else "비활성(키 없음)")
 
     pages_fetched = 0
     media_processed = 0

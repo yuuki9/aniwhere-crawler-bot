@@ -2,7 +2,7 @@
 #
 #   docker compose --env-file ../aniwhere-sql-ddl/.env up --build -d
 #
-# (TMDB 보강은 동일 파일에 TMDB_API_KEY=... 추가하거나, 아래 environment 에 직접 넣으세요.)
+# TMDB: 코드 기본 키 사용. 덮어쓰려면 아래 environment 에 TMDB_API_KEY 를 추가하세요.
 
 services:
   api:
@@ -17,5 +17,4 @@ services:
       DB_USERNAME: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       DB_NAME: ${MYSQL_DATABASE}
-      TMDB_API_KEY: ${TMDB_API_KEY:-}
       PYTHONPATH: /app

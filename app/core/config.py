@@ -9,6 +9,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # TMDB_API_KEY= 처럼 빈 값이 환경에 있으면 필드 기본값을 유지 (Docker Compose 등)
+        env_ignore_empty=True,
     )
 
     # App
