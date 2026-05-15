@@ -102,12 +102,12 @@ def filter_work_ids(ids: object, allowed: set[int]) -> list[int]:
         return []
     out: list[int] = []
     for item in ids:
-        try:
-            w = int(item)
-        except (TypeError, ValueError):
+        if isinstance(item, bool):
             continue
-        if w in allowed:
-            out.append(w)
+        if not isinstance(item, int):
+            continue
+        if item in allowed:
+            out.append(item)
     return out
 
 
